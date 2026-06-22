@@ -3,7 +3,11 @@ package com.mangrove.app.data
 import android.content.Context
 import coil.ImageLoader
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import okhttp3.Authenticator
 import okhttp3.Interceptor
@@ -23,6 +27,10 @@ class AppContainer(context: Context) {
     private val appContext = context.applicationContext
     val prefs = Prefs(appContext)
     private val cookieJar = PersistentCookieJar(prefs)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    val downloadStore = DownloadStore(appContext)
+    val downloadManager = DownloadManager(this, downloadStore, scope)
 
     @Volatile
     var user: UserDto? = null
@@ -32,6 +40,7 @@ class AppContainer(context: Context) {
 
     init {
         prefs.serverUrl?.let { runCatching { backend = Backend(normalize(it)) } }
+        if (backend != null) downloadManager.resume()
     }
 
     val baseUrl: String? get() = backend?.baseUrl
@@ -45,6 +54,7 @@ class AppContainer(context: Context) {
         val normalized = normalize(rawUrl)
         backend = Backend(normalized)
         prefs.serverUrl = normalized
+        downloadManager.resume()
     }
 
     fun absoluteUrl(path: String): String {
@@ -101,12 +111,19 @@ class AppContainer(context: Context) {
     suspend fun saveProgress(chapterId: Int, page: Int) =
         runCatching { requireBackend().api.saveProgress(ProgressRequest(chapterId, page)) }
 
-    suspend fun getPreferences(): Map<String, String?> =
-        runCatching { requireBackend().api.getPreferences() }.getOrDefault(emptyMap())
+    suspend fun getPreferences(): Map<String, String?> {
+        val prefsMap = runCatching { requireBackend().api.getPreferences() }.getOrDefault(emptyMap())
+        prefsMap["reader.dir"]?.let { prefs.readerDir = it } // cache so the reader works offline
+        return prefsMap
+    }
 
     suspend fun savePreference(key: String, value: String) {
+        if (key == "reader.dir") prefs.readerDir = value
         runCatching { requireBackend().api.savePreferences(mapOf(key to value)) }
     }
+
+    /** Authenticated binary GET (page images, covers) used by the download manager. */
+    suspend fun fetchBytes(path: String): ByteArray? = backend?.getBytes(path)
 
     private fun requireBackend(): Backend = backend ?: error("No server configured")
 
@@ -172,6 +189,15 @@ class AppContainer(context: Context) {
             .client(client)
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
             .build()
+
+        suspend fun getBytes(path: String): ByteArray? = withContext(Dispatchers.IO) {
+            val url = baseUrl.trimEnd('/') + "/" + path.trimStart('/')
+            val request = Request.Builder().url(url).get().build()
+            apiClient.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext null
+                resp.body?.bytes()
+            }
+        }
 
         private val refreshLock = Any()
 

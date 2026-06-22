@@ -14,6 +14,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.mangrove.app.data.AppContainer
+import com.mangrove.app.ui.DownloadsScreen
 import com.mangrove.app.ui.HomeScreen
 import com.mangrove.app.ui.LibraryScreen
 import com.mangrove.app.ui.LoadingBox
@@ -45,6 +46,7 @@ private fun AppRoot(container: AppContainer) {
         composable("server") { ServerScreen(container, nav) }
         composable("login") { LoginScreen(container, nav) }
         composable("home") { HomeScreen(container, nav) }
+        composable("downloads") { DownloadsScreen(container, nav) }
         composable(
             "library/{id}",
             arguments = listOf(navArgument("id") { type = NavType.IntType }),

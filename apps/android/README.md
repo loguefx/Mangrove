@@ -20,10 +20,15 @@ Implemented:
   and progress sync to `/api/progress`.
 - **Reading direction is a synced per-user preference** (`reader.dir` via `/api/me/preferences`),
   so it matches the web reader across devices.
+- **Offline downloads** — download a single chapter or a whole series ("Download all"). Page images
+  are saved on the device (with a small metadata file per chapter), downloads resume if interrupted,
+  and a **Downloads** screen lets you browse and read saved series with **no connection** (reachable
+  from Home, or via "Open offline downloads" on the login screen). The reader automatically uses
+  local pages when a chapter is downloaded.
 
 Not yet implemented (planned next): webtoon continuous scroll, dual-page, tap-zone navigation,
-EPUB reader, offline downloads (Room + WorkManager), favorites/notifications, multi-server,
-encrypted token storage, and a settings screen.
+EPUB reader, true background downloads (WorkManager) + Wi-Fi-only option, favorites/notifications,
+multi-server, encrypted token storage, and a settings screen.
 
 ## Prerequisites
 

@@ -100,5 +100,10 @@ fun LoginScreen(container: AppContainer, nav: NavController) {
         TextButton(onClick = { nav.navigate("server") }) {
             Text("Change server", color = TealMint)
         }
+        if (container.downloadStore.hasAnyDownloads()) {
+            TextButton(onClick = { nav.navigate("downloads") }) {
+                Text("Open offline downloads", color = TealMint)
+            }
+        }
     }
 }

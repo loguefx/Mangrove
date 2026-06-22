@@ -60,12 +60,17 @@ fun HomeScreen(container: AppContainer, nav: NavController) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("Mangrove", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-            TextButton(onClick = {
-                scope.launch {
-                    container.logout()
-                    nav.navigate("login") { popUpTo("home") { inclusive = true } }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { nav.navigate("downloads") }) {
+                    Text("Downloads", color = TealMint)
                 }
-            }) { Text("Sign out", color = TealMint) }
+                TextButton(onClick = {
+                    scope.launch {
+                        container.logout()
+                        nav.navigate("login") { popUpTo("home") { inclusive = true } }
+                    }
+                }) { Text("Sign out", color = TealMint) }
+            }
         }
 
         if (loading) {

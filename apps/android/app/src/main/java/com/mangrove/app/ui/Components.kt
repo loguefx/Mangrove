@@ -107,6 +107,26 @@ fun SectionTitle(text: String, modifier: Modifier = Modifier) {
     )
 }
 
+/** Loads an image from a local file (downloaded page/cover) for fully-offline display. */
+@Composable
+fun FileImage(
+    container: AppContainer,
+    file: java.io.File,
+    contentDescription: String?,
+    modifier: Modifier = Modifier,
+    contentScale: ContentScale = ContentScale.Crop,
+) {
+    val context = LocalContext.current
+    val loader = container.imageLoader
+    AsyncImage(
+        model = ImageRequest.Builder(context).data(file).build(),
+        contentDescription = contentDescription,
+        imageLoader = loader ?: coil.ImageLoader(context),
+        modifier = modifier,
+        contentScale = contentScale,
+    )
+}
+
 @Composable
 fun LoadingBox(modifier: Modifier = Modifier) {
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

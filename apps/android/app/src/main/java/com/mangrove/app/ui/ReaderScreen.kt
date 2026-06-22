@@ -40,6 +40,7 @@ import kotlinx.coroutines.launch
 fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
     var manifest by remember { mutableStateOf<ChapterManifestDto?>(null) }
     var ready by remember { mutableStateOf(false) }
+    var offline by remember { mutableStateOf(false) }
     var rtl by remember { mutableStateOf(false) }
     var dirPref by remember { mutableStateOf("auto") }
     var startPage by remember { mutableIntStateOf(0) }
@@ -47,10 +48,18 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(chapterId) {
-        val m = runCatching { container.manifest(chapterId) }.getOrNull()
+        // Prefer locally downloaded pages so the reader works with no connection.
+        val localMeta = container.downloadStore.readMeta(chapterId)?.takeIf { it.complete }
+        offline = localMeta != null
+        val m = if (localMeta != null) {
+            ChapterManifestDto(chapterId, localMeta.pageCount, localMeta.readingDirection, "", "image")
+        } else {
+            runCatching { container.manifest(chapterId) }.getOrNull()
+        }
         manifest = m
         if (m != null) {
-            dirPref = container.getPreferences()["reader.dir"] ?: "auto"
+            val prefsMap = runCatching { container.getPreferences() }.getOrNull()
+            dirPref = prefsMap?.get("reader.dir") ?: container.prefs.readerDir ?: "auto"
             rtl = directionToRtl(dirPref, m.readingDirection)
             val saved = container.progress(chapterId)?.page ?: 0
             startPage = saved.coerceIn(0, (m.pageCount - 1).coerceAtLeast(0))
@@ -85,13 +94,23 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
             reverseLayout = rtl,
             modifier = Modifier.fillMaxSize(),
         ) { page ->
-            NetworkImage(
-                container = container,
-                path = "api/chapters/$chapterId/pages/$page",
-                contentDescription = "Page ${page + 1}",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Fit,
-            )
+            if (offline) {
+                FileImage(
+                    container = container,
+                    file = container.downloadStore.pageFile(chapterId, page),
+                    contentDescription = "Page ${page + 1}",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                )
+            } else {
+                NetworkImage(
+                    container = container,
+                    path = "api/chapters/$chapterId/pages/$page",
+                    contentDescription = "Page ${page + 1}",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit,
+                )
+            }
         }
 
         // Top chrome: back, page indicator, direction menu.
@@ -107,7 +126,8 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
             Text(
-                "Page ${pagerState.currentPage + 1} / ${m.pageCount} · ${if (rtl) "RTL" else "LTR"}",
+                "Page ${pagerState.currentPage + 1} / ${m.pageCount} · ${if (rtl) "RTL" else "LTR"}" +
+                    if (offline) " · Offline" else "",
                 color = Color.White,
                 modifier = Modifier.weight(1f),
             )

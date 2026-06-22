@@ -18,6 +18,11 @@ class Prefs(context: Context) {
         get() = sp.getString(KEY_TOKEN, null)
         set(value) = sp.edit().putString(KEY_TOKEN, value).apply()
 
+    /** Last-known reading direction preference, cached so the reader works offline. */
+    var readerDir: String?
+        get() = sp.getString(KEY_READER_DIR, null)
+        set(value) = sp.edit().putString(KEY_READER_DIR, value).apply()
+
     fun loadCookies(): Set<String> = sp.getStringSet(KEY_COOKIES, emptySet()) ?: emptySet()
 
     fun saveCookies(values: Set<String>) {
@@ -33,5 +38,6 @@ class Prefs(context: Context) {
         const val KEY_SERVER = "server_url"
         const val KEY_TOKEN = "access_token"
         const val KEY_COOKIES = "cookies"
+        const val KEY_READER_DIR = "reader_dir"
     }
 }
