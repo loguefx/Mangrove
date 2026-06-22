@@ -61,6 +61,24 @@ fun DownloadsScreen(container: AppContainer, nav: NavController) {
             Text(selected?.name ?: "Downloads", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
         }
 
+        if (selectedId == null) {
+            var wifiOnly by remember { mutableStateOf(container.prefs.wifiOnly) }
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Download on Wi-Fi only", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                androidx.compose.material3.Switch(
+                    checked = wifiOnly,
+                    onCheckedChange = {
+                        wifiOnly = it
+                        container.prefs.wifiOnly = it
+                        container.downloadManager.rescheduleForConstraintChange()
+                    },
+                )
+            }
+        }
+
         when {
             series.isEmpty() ->
                 MessageBox("No downloads yet. Open a series and tap the download icon to save chapters for offline reading.")

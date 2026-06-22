@@ -23,6 +23,11 @@ class Prefs(context: Context) {
         get() = sp.getString(KEY_READER_DIR, null)
         set(value) = sp.edit().putString(KEY_READER_DIR, value).apply()
 
+    /** When true, downloads only run on unmetered (Wi-Fi) networks. */
+    var wifiOnly: Boolean
+        get() = sp.getBoolean(KEY_WIFI_ONLY, false)
+        set(value) = sp.edit().putBoolean(KEY_WIFI_ONLY, value).apply()
+
     fun loadCookies(): Set<String> = sp.getStringSet(KEY_COOKIES, emptySet()) ?: emptySet()
 
     fun saveCookies(values: Set<String>) {
@@ -39,5 +44,6 @@ class Prefs(context: Context) {
         const val KEY_TOKEN = "access_token"
         const val KEY_COOKIES = "cookies"
         const val KEY_READER_DIR = "reader_dir"
+        const val KEY_WIFI_ONLY = "wifi_only"
     }
 }

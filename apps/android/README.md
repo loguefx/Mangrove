@@ -21,14 +21,18 @@ Implemented:
 - **Reading direction is a synced per-user preference** (`reader.dir` via `/api/me/preferences`),
   so it matches the web reader across devices.
 - **Offline downloads** — download a single chapter or a whole series ("Download all"). Page images
-  are saved on the device (with a small metadata file per chapter), downloads resume if interrupted,
-  and a **Downloads** screen lets you browse and read saved series with **no connection** (reachable
-  from Home, or via "Open offline downloads" on the login screen). The reader automatically uses
-  local pages when a chapter is downloaded.
+  are saved to the app's **private storage** (never the gallery/shared storage), with a small
+  metadata file per chapter. A **Downloads** screen lets you browse and read saved series with **no
+  connection** (reachable from Home, or via "Open offline downloads" on the login screen). The
+  reader automatically uses local pages when a chapter is downloaded.
+- **Background downloads (WorkManager)** — downloads run in a **foreground (data-sync) service** with
+  a progress notification, so they keep going when the app is closed, **survive reboots**, and are
+  **unlimited** (queue as many chapters/series as you want; only your free storage limits it).
+  Transient network errors auto-retry. A **"Download on Wi-Fi only"** toggle (Downloads screen)
+  restricts downloads to unmetered networks.
 
 Not yet implemented (planned next): webtoon continuous scroll, dual-page, tap-zone navigation,
-EPUB reader, true background downloads (WorkManager) + Wi-Fi-only option, favorites/notifications,
-multi-server, encrypted token storage, and a settings screen.
+EPUB reader, favorites/notifications, multi-server, encrypted token storage, and a settings screen.
 
 ## Prerequisites
 

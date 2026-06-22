@@ -1,11 +1,16 @@
 package com.mangrove.app.data
 
+import android.content.Context
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.launch
-import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.flow.asStateFlow
 
 data class DownloadRequest(
     val chapterId: Int,
@@ -26,38 +31,50 @@ data class DownloadProgress(
 )
 
 /**
- * In-process download worker: page images are fetched (with auth) and written to the DownloadStore,
- * one chapter at a time. Incomplete downloads resume automatically on launch. Progress is published
- * as a StateFlow the UI observes. (A future enhancement is WorkManager for true background work.)
+ * Schedules and tracks offline downloads. Actual work runs in [DownloadWorker] via WorkManager, so
+ * it continues in the background (foreground service) even if the app is closed, survives reboots,
+ * and is unlimited — you can queue as many chapters/series as you want. Files are written only to
+ * the app's private storage (DownloadStore), never to the gallery or shared storage.
  */
 class DownloadManager(
     private val app: AppContainer,
+    private val context: Context,
     private val store: DownloadStore,
-    private val scope: CoroutineScope,
+    @Suppress("unused") private val scope: CoroutineScope,
 ) {
+    private val wm = WorkManager.getInstance(context)
+
     private val _progress = MutableStateFlow<Map<Int, DownloadProgress>>(emptyMap())
-    val progress: StateFlow<Map<Int, DownloadProgress>> = _progress
-
-    private val seeds = ConcurrentHashMap<Int, DownloadRequest>()
-    private val queued = ConcurrentHashMap.newKeySet<Int>()
-    private val queue = Channel<Int>(Channel.UNLIMITED)
-
-    init {
-        scope.launch {
-            for (chapterId in queue) {
-                runCatching { downloadChapter(chapterId) }
-                    .onFailure { setProgress(chapterId) { it.copy(state = DownloadState.Failed) } }
-                queued.remove(chapterId)
-            }
-        }
-    }
+    val progress: StateFlow<Map<Int, DownloadProgress>> = _progress.asStateFlow()
 
     fun enqueue(req: DownloadRequest) {
         if (store.isComplete(req.chapterId)) return
-        if (!queued.add(req.chapterId)) return
-        seeds[req.chapterId] = req
-        update(req.chapterId, DownloadProgress(req.chapterId, 0, 0, DownloadState.Queued))
-        queue.trySend(req.chapterId)
+
+        // Seed metadata so the worker knows the series info even before fetching the manifest.
+        val existing = store.readMeta(req.chapterId)
+        val seed = (existing ?: DownloadMeta(chapterId = req.chapterId, seriesId = req.seriesId, seriesName = req.seriesName))
+            .copy(
+                seriesId = req.seriesId,
+                seriesName = req.seriesName,
+                volumeNumber = req.volumeNumber,
+                number = req.number,
+                title = req.title,
+                complete = false,
+            )
+        store.writeMeta(seed)
+
+        update(req.chapterId, DownloadProgress(req.chapterId, seed.downloadedPages, seed.pageCount, DownloadState.Queued))
+        startWorker(ExistingWorkPolicy.KEEP)
+    }
+
+    /** Re-queues any interrupted downloads. Safe to call on launch / after the server is set. */
+    fun resume() {
+        if (store.allMetas().any { !it.complete }) startWorker(ExistingWorkPolicy.KEEP)
+    }
+
+    /** Apply a changed Wi-Fi-only setting to the in-flight batch. */
+    fun rescheduleForConstraintChange() {
+        if (store.allMetas().any { !it.complete }) startWorker(ExistingWorkPolicy.REPLACE)
     }
 
     fun isQueuedOrRunning(chapterId: Int): Boolean {
@@ -65,54 +82,54 @@ class DownloadManager(
         return state == DownloadState.Queued || state == DownloadState.Running
     }
 
-    /** Re-queues any chapters whose download was interrupted. Call once the backend is ready. */
-    fun resume() {
-        store.allMetas().filter { !it.complete }.forEach { meta ->
-            enqueue(
-                DownloadRequest(
-                    chapterId = meta.chapterId,
-                    seriesId = meta.seriesId,
-                    seriesName = meta.seriesName,
-                    volumeNumber = meta.volumeNumber,
-                    number = meta.number,
-                    title = meta.title,
-                ),
-            )
-        }
+    private fun startWorker(policy: ExistingWorkPolicy) {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(if (app.prefs.wifiOnly) NetworkType.UNMETERED else NetworkType.CONNECTED)
+            .build()
+        val request = OneTimeWorkRequestBuilder<DownloadWorker>()
+            .setConstraints(constraints)
+            .addTag(TAG)
+            .build()
+        wm.enqueueUniqueWork(WORK_NAME, policy, request)
     }
 
-    private suspend fun downloadChapter(chapterId: Int) {
-        val seed = seeds[chapterId] ?: store.readMeta(chapterId)?.let {
-            DownloadRequest(it.chapterId, it.seriesId, it.seriesName, it.volumeNumber, it.number, it.title)
-        } ?: return
+    // ---- Called by DownloadWorker ----
 
-        update(chapterId, DownloadProgress(chapterId, 0, 0, DownloadState.Running))
+    /** The next chapter that still needs downloading, or null when the batch is done. */
+    fun nextPending(): DownloadMeta? = store.allMetas().firstOrNull { !it.complete }
+
+    internal fun update(chapterId: Int, progress: DownloadProgress) {
+        _progress.value = _progress.value.toMutableMap().apply { put(chapterId, progress) }
+    }
+
+    /**
+     * Downloads one chapter's pages. Throws on network/transport failure so the worker can retry.
+     * [onProgress] is invoked as pages complete (for the notification).
+     */
+    suspend fun runDownload(chapterId: Int, onProgress: (DownloadMeta, Int, Int) -> Unit = { _, _, _ -> }) {
+        val seed = store.readMeta(chapterId) ?: return
+        if (seed.complete) return
+
+        update(chapterId, DownloadProgress(chapterId, seed.downloadedPages, seed.pageCount, DownloadState.Running))
 
         val manifest = app.manifest(chapterId)
         if (!manifest.mediaType.equals("image", ignoreCase = true) || manifest.pageCount <= 0) {
-            // EPUB/unsupported in the image reader — mark failed so the UI can show it.
+            // EPUB/unsupported in the image reader: mark complete=false but skip so it won't block the batch.
+            store.deleteChapter(chapterId)
             update(chapterId, DownloadProgress(chapterId, 0, manifest.pageCount, DownloadState.Failed))
             return
         }
 
-        var meta = DownloadMeta(
-            chapterId = chapterId,
-            seriesId = seed.seriesId,
-            seriesName = seed.seriesName,
-            volumeNumber = seed.volumeNumber,
-            number = seed.number,
-            title = seed.title,
+        var meta = seed.copy(
             pageCount = manifest.pageCount,
             readingDirection = manifest.readingDirection,
-            downloadedPages = 0,
             complete = false,
         )
         store.writeMeta(meta)
 
-        // Cache the series cover for the offline library (best-effort).
-        val coverFile = store.seriesCoverFile(seed.seriesId)
+        val coverFile = store.seriesCoverFile(meta.seriesId)
         if (!coverFile.exists()) {
-            app.fetchBytes("api/series/${seed.seriesId}/cover")?.let { coverFile.writeBytes(it) }
+            app.fetchBytes("api/series/${meta.seriesId}/cover")?.let { coverFile.writeBytes(it) }
         }
 
         var done = 0
@@ -128,6 +145,7 @@ class DownloadManager(
                 meta = meta.copy(downloadedPages = done)
                 store.writeMeta(meta)
                 update(chapterId, DownloadProgress(chapterId, done, manifest.pageCount, DownloadState.Running))
+                onProgress(meta, done, manifest.pageCount)
             }
         }
 
@@ -135,12 +153,8 @@ class DownloadManager(
         update(chapterId, DownloadProgress(chapterId, done, manifest.pageCount, DownloadState.Done))
     }
 
-    private fun update(chapterId: Int, progress: DownloadProgress) {
-        _progress.value = _progress.value.toMutableMap().apply { put(chapterId, progress) }
-    }
-
-    private fun setProgress(chapterId: Int, transform: (DownloadProgress) -> DownloadProgress) {
-        val current = _progress.value[chapterId] ?: DownloadProgress(chapterId, 0, 0, DownloadState.Queued)
-        update(chapterId, transform(current))
+    companion object {
+        const val WORK_NAME = "mangrove-downloads"
+        const val TAG = "mangrove-download"
     }
 }

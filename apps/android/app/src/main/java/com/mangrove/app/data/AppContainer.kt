@@ -30,7 +30,7 @@ class AppContainer(context: Context) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     val downloadStore = DownloadStore(appContext)
-    val downloadManager = DownloadManager(this, downloadStore, scope)
+    val downloadManager = DownloadManager(this, appContext, downloadStore, scope)
 
     @Volatile
     var user: UserDto? = null
