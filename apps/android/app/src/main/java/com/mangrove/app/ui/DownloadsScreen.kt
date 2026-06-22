@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -50,33 +51,23 @@ fun DownloadsScreen(container: AppContainer, nav: NavController) {
     var selectedId by remember { mutableStateOf<Int?>(null) }
     val selected = series.firstOrNull { it.seriesId == selectedId }
 
+    // Back arrow only when drilling into a series, or when reached offline from the login screen
+    // (no signed-in user) so there's still a way back. As a bottom-nav tab it shows no back arrow.
+    val showBack = selectedId != null || container.user == null
+
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = { if (selectedId != null) selectedId = null else nav.popBackStack() }) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            if (showBack) {
+                IconButton(onClick = { if (selectedId != null) selectedId = null else nav.popBackStack() }) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                }
+            } else {
+                androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
             }
-            Text(selected?.name ?: "Downloads", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
-        }
-
-        if (selectedId == null) {
-            var wifiOnly by remember { mutableStateOf(container.prefs.wifiOnly) }
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text("Download on Wi-Fi only", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                androidx.compose.material3.Switch(
-                    checked = wifiOnly,
-                    onCheckedChange = {
-                        wifiOnly = it
-                        container.prefs.wifiOnly = it
-                        container.downloadManager.rescheduleForConstraintChange()
-                    },
-                )
-            }
+            Text(selected?.name ?: "Downloads", fontSize = 24.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
         }
 
         when {

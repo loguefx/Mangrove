@@ -12,14 +12,19 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.mangrove.app.data.AppContainer
@@ -143,5 +148,24 @@ fun MessageBox(text: String, modifier: Modifier = Modifier) {
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )
+    }
+}
+
+/**
+ * Invokes [onResume] every time this destination is resumed. Inside a NavHost the
+ * LifecycleOwner is the destination's NavBackStackEntry, so this fires on first display AND
+ * whenever the user returns to the screen (back navigation or switching bottom-nav tabs) and
+ * when the app comes back to the foreground — used to auto-refresh server data.
+ */
+@Composable
+fun LifecycleResumeRefresh(onResume: () -> Unit) {
+    val current = rememberUpdatedState(onResume)
+    val owner = LocalLifecycleOwner.current
+    DisposableEffect(owner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) current.value()
+        }
+        owner.lifecycle.addObserver(observer)
+        onDispose { owner.lifecycle.removeObserver(observer) }
     }
 }
