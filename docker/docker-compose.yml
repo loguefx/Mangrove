@@ -1,0 +1,21 @@
+services:
+  mangrove:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: mangrove:latest
+    ports:
+      - "5000:5000"
+    environment:
+      MANGROVE_PORT: "5000"
+      MANGROVE_DB_PATH: /data/mangrove.db
+      MANGROVE_CACHE_DIR: /data/cache
+      # Provide real secrets via an .env file or your orchestrator's secret store.
+      MANGROVE_JWT_SECRET: ${MANGROVE_JWT_SECRET}
+      MANGROVE_DATAPROTECTION_KEY: ${MANGROVE_DATAPROTECTION_KEY}
+    volumes:
+      - mangrove-data:/data
+    restart: unless-stopped
+
+volumes:
+  mangrove-data:

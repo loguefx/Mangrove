@@ -1,0 +1,34 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Mangrove">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#0D9488"/>
+      <stop offset="1" stop-color="#0F3D38"/>
+    </linearGradient>
+    <linearGradient id="leaf" x1="256" y1="150" x2="256" y2="310" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#99F6E4"/>
+      <stop offset="1" stop-color="#2DD4BF"/>
+    </linearGradient>
+    <linearGradient id="page" x1="256" y1="296" x2="256" y2="388" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E2F3F0"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="512" height="512" rx="116" fill="url(#bg)"/>
+
+  <g transform="translate(0,-6)">
+    <!-- canopy: three leaf-pages rising from the spine -->
+    <g>
+      <path d="M256 302 C 230 258 230 208 256 160 C 282 208 282 258 256 302 Z" fill="url(#leaf)" transform="rotate(-34 256 302)" opacity="0.92"/>
+      <path d="M256 302 C 230 258 230 208 256 160 C 282 208 282 258 256 302 Z" fill="url(#leaf)" transform="rotate(34 256 302)" opacity="0.92"/>
+      <path d="M256 304 C 228 254 228 198 256 146 C 284 198 284 254 256 304 Z" fill="url(#leaf)"/>
+    </g>
+
+    <!-- open book -->
+    <path d="M256 300 L150 316 Q138 345 142 374 L256 386 Z" fill="url(#page)"/>
+    <path d="M256 300 L362 316 Q374 345 370 374 L256 386 Z" fill="url(#page)"/>
+    <line x1="256" y1="300" x2="256" y2="386" stroke="#0F3D38" stroke-width="7" stroke-linecap="round" opacity="0.85"/>
+    <path d="M256 300 L150 316 Q138 345 142 374 L256 386 Z" fill="none" stroke="#0F766E" stroke-width="3" opacity="0.25"/>
+    <path d="M256 300 L362 316 Q374 345 370 374 L256 386 Z" fill="none" stroke="#0F766E" stroke-width="3" opacity="0.25"/>
+  </g>
+</svg>

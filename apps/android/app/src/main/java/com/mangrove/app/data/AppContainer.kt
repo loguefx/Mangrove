@@ -1,0 +1,214 @@
+package com.mangrove.app.data
+
+import android.content.Context
+import coil.ImageLoader
+import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import okhttp3.Authenticator
+import okhttp3.Interceptor
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.Route
+import okhttp3.logging.HttpLoggingInterceptor
+import retrofit2.Retrofit
+
+/**
+ * Process-wide singleton holding network + session state. Because the server URL is chosen at
+ * runtime, the Retrofit/OkHttp stack is (re)built whenever the server changes.
+ */
+class AppContainer(context: Context) {
+    private val appContext = context.applicationContext
+    val prefs = Prefs(appContext)
+    private val cookieJar = PersistentCookieJar(prefs)
+
+    @Volatile
+    var user: UserDto? = null
+
+    @Volatile
+    private var backend: Backend? = null
+
+    init {
+        prefs.serverUrl?.let { runCatching { backend = Backend(normalize(it)) } }
+    }
+
+    val baseUrl: String? get() = backend?.baseUrl
+    val imageLoader: ImageLoader? get() = backend?.imageLoader
+
+    fun hasServer(): Boolean = backend != null
+    fun hasSession(): Boolean = prefs.accessToken != null
+
+    /** Validates and switches the active server. Throws if the URL is malformed. */
+    fun setServer(rawUrl: String) {
+        val normalized = normalize(rawUrl)
+        backend = Backend(normalized)
+        prefs.serverUrl = normalized
+    }
+
+    fun absoluteUrl(path: String): String {
+        val base = backend?.baseUrl ?: return path
+        return base.trimEnd('/') + "/" + path.trimStart('/')
+    }
+
+    // ---- Session ----
+
+    suspend fun login(username: String, password: String): UserDto {
+        val b = requireBackend()
+        val res = b.authApi.login(LoginRequest(username, password))
+        prefs.accessToken = res.accessToken
+        user = res.user
+        return res.user
+    }
+
+    suspend fun restoreSession(): Boolean {
+        val b = backend ?: return false
+        return try {
+            user = b.api.me()
+            true
+        } catch (e: Exception) {
+            // Access token may be stale; the authenticator will have tried a refresh already.
+            try {
+                val refreshed = b.authApi.refresh()
+                prefs.accessToken = refreshed.accessToken
+                user = refreshed.user
+                true
+            } catch (e2: Exception) {
+                false
+            }
+        }
+    }
+
+    suspend fun logout() {
+        try {
+            backend?.authApi?.logout()
+        } catch (_: Exception) {
+        }
+        prefs.clearSession()
+        cookieJar.clear()
+        user = null
+    }
+
+    // ---- Data ----
+
+    suspend fun dashboard() = requireBackend().api.dashboard()
+    suspend fun libraries() = requireBackend().api.libraries()
+    suspend fun series(libraryId: Int, filter: String?) = requireBackend().api.series(libraryId, filter)
+    suspend fun seriesDetail(id: Int) = requireBackend().api.seriesDetail(id)
+    suspend fun manifest(chapterId: Int) = requireBackend().api.chapterManifest(chapterId)
+    suspend fun progress(chapterId: Int) = runCatching { requireBackend().api.progress(chapterId) }.getOrNull()
+    suspend fun saveProgress(chapterId: Int, page: Int) =
+        runCatching { requireBackend().api.saveProgress(ProgressRequest(chapterId, page)) }
+
+    suspend fun getPreferences(): Map<String, String?> =
+        runCatching { requireBackend().api.getPreferences() }.getOrDefault(emptyMap())
+
+    suspend fun savePreference(key: String, value: String) {
+        runCatching { requireBackend().api.savePreferences(mapOf(key to value)) }
+    }
+
+    private fun requireBackend(): Backend = backend ?: error("No server configured")
+
+    // ---- URL helpers ----
+
+    private fun normalize(raw: String): String {
+        var url = raw.trim()
+        if (!url.startsWith("http://") && !url.startsWith("https://")) url = "http://$url"
+        if (!url.endsWith("/")) url = "$url/"
+        return url
+    }
+
+    /** Bundles a Retrofit/OkHttp/Coil stack bound to one base URL. */
+    private inner class Backend(val baseUrl: String) {
+        private val json = Json {
+            ignoreUnknownKeys = true
+            isLenient = true
+            explicitNulls = false
+        }
+
+        private val logging = HttpLoggingInterceptor().apply {
+            level = HttpLoggingInterceptor.Level.BASIC
+        }
+
+        // Client without the authenticator, used for login/refresh/logout (and as the refresh path).
+        private val authClient: OkHttpClient = OkHttpClient.Builder()
+            .cookieJar(cookieJar)
+            .addInterceptor(logging)
+            .build()
+
+        val authApi: MangroveApi = retrofit(authClient).create(MangroveApi::class.java)
+
+        private val bearerInterceptor = Interceptor { chain ->
+            val token = prefs.accessToken
+            val req = if (token != null) {
+                chain.request().newBuilder().header("Authorization", "Bearer $token").build()
+            } else {
+                chain.request()
+            }
+            chain.proceed(req)
+        }
+
+        private val authenticator = Authenticator { _: Route?, response: Response ->
+            refreshOnUnauthorized(response)
+        }
+
+        private val apiClient: OkHttpClient = OkHttpClient.Builder()
+            .cookieJar(cookieJar)
+            .addInterceptor(bearerInterceptor)
+            .addInterceptor(logging)
+            .authenticator(authenticator)
+            .build()
+
+        val api: MangroveApi = retrofit(apiClient).create(MangroveApi::class.java)
+
+        val imageLoader: ImageLoader = ImageLoader.Builder(appContext)
+            .okHttpClient(apiClient)
+            .crossfade(true)
+            .build()
+
+        private fun retrofit(client: OkHttpClient): Retrofit = Retrofit.Builder()
+            .baseUrl(baseUrl)
+            .client(client)
+            .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
+            .build()
+
+        private val refreshLock = Any()
+
+        private fun refreshOnUnauthorized(response: Response): Request? {
+            if (responseCount(response) >= 2) return null
+            synchronized(refreshLock) {
+                val requestToken = response.request.header("Authorization")?.removePrefix("Bearer ")
+                val current = prefs.accessToken
+                // Another thread may have already refreshed; retry with the newest token.
+                if (current != null && current != requestToken) {
+                    return response.request.newBuilder()
+                        .header("Authorization", "Bearer $current").build()
+                }
+                val refreshed = try {
+                    runBlocking { authApi.refresh() }
+                } catch (e: Exception) {
+                    null
+                }
+                if (refreshed == null) {
+                    prefs.clearSession()
+                    return null
+                }
+                prefs.accessToken = refreshed.accessToken
+                user = refreshed.user
+                return response.request.newBuilder()
+                    .header("Authorization", "Bearer ${refreshed.accessToken}").build()
+            }
+        }
+
+        private fun responseCount(response: Response): Int {
+            var count = 1
+            var prior = response.priorResponse
+            while (prior != null) {
+                count++
+                prior = prior.priorResponse
+            }
+            return count
+        }
+    }
+}

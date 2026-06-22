@@ -1,0 +1,37 @@
+# ---- Secrets / env ----
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+local.properties
+
+# ---- Runtime data (never commit) ----
+mangrove.db
+mangrove.db-*
+*.db
+*.db-shm
+*.db-wal
+cache/
+apps/server/cache/
+apps/server/mangrove.db*
+
+# ---- .NET ----
+bin/
+obj/
+*.user
+
+# ---- Node / web ----
+node_modules/
+apps/web/dist/
+*.local
+
+# ---- Android ----
+apps/android/.gradle/
+apps/android/build/
+apps/android/app/build/
+.idea/
+
+# ---- OS / editor ----
+.DS_Store
+Thumbs.db

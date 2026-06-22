@@ -1,0 +1,71 @@
+using Mangrove.Server.Data;
+using Mangrove.Server.Dtos;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+
+namespace Mangrove.Server.Controllers;
+
+[ApiController]
+[Route("api/progress")]
+[Authorize]
+public sealed class ProgressController : ControllerBase
+{
+    private readonly MangroveDbContext _db;
+    public ProgressController(MangroveDbContext db) => _db = db;
+
+    [HttpPost]
+    public async Task<ActionResult<ProgressDto>> Save(ProgressRequest req, CancellationToken ct)
+    {
+        var userId = User.GetUserId();
+        if (userId is null) return Unauthorized();
+        if (!await _db.Chapters.AnyAsync(c => c.Id == req.ChapterId, ct)) return NotFound();
+
+        var progress = await _db.ReadingProgress
+            .FirstOrDefaultAsync(p => p.UserId == userId && p.ChapterId == req.ChapterId, ct);
+
+        if (progress is null)
+        {
+            progress = new ReadingProgress { UserId = userId.Value, ChapterId = req.ChapterId };
+            _db.ReadingProgress.Add(progress);
+        }
+
+        progress.PageNum = req.Page;
+        progress.ScrollOffset = req.ScrollOffset;
+        if (req.IsRead is { } read) progress.IsRead = read;
+        progress.UpdatedAt = DateTime.UtcNow;
+
+        await _db.SaveChangesAsync(ct);
+        return Ok(new ProgressDto(progress.ChapterId, progress.PageNum, progress.ScrollOffset, progress.IsRead, progress.UpdatedAt));
+    }
+
+    [HttpGet("{chapterId:int}")]
+    public async Task<ActionResult<ProgressDto>> GetForChapter(int chapterId, CancellationToken ct)
+    {
+        var userId = User.GetUserId();
+        if (userId is null) return Unauthorized();
+
+        var progress = await _db.ReadingProgress
+            .FirstOrDefaultAsync(p => p.UserId == userId && p.ChapterId == chapterId, ct);
+        if (progress is null)
+            return Ok(new ProgressDto(chapterId, 0, null, false, DateTime.MinValue));
+
+        return Ok(new ProgressDto(progress.ChapterId, progress.PageNum, progress.ScrollOffset, progress.IsRead, progress.UpdatedAt));
+    }
+
+    [HttpGet]
+    public async Task<ActionResult<IEnumerable<ProgressDto>>> Get([FromQuery] int? seriesId, CancellationToken ct)
+    {
+        var userId = User.GetUserId();
+        if (userId is null) return Unauthorized();
+
+        var query = _db.ReadingProgress.Where(p => p.UserId == userId);
+        if (seriesId is { } sid)
+            query = query.Where(p => p.Chapter.Volume.SeriesId == sid);
+
+        var items = await query
+            .Select(p => new ProgressDto(p.ChapterId, p.PageNum, p.ScrollOffset, p.IsRead, p.UpdatedAt))
+            .ToListAsync(ct);
+        return Ok(items);
+    }
+}

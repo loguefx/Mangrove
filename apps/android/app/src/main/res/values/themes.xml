@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base theme is provided by Compose (MangroveTheme). This Material3 theme only
+         controls the splash/window background before Compose takes over. -->
+    <style name="Theme.Mangrove" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">@color/mangrove_bg</item>
+        <item name="android:navigationBarColor">@color/mangrove_bg</item>
+        <item name="android:windowBackground">@color/mangrove_bg</item>
+    </style>
+</resources>

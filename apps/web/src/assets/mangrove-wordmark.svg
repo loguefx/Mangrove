@@ -1,0 +1,22 @@
+<svg width="760" height="200" viewBox="0 0 760 200" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Mangrove">
+  <defs>
+    <linearGradient id="leaf2" x1="100" y1="40" x2="100" y2="150" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2DD4BF"/>
+      <stop offset="1" stop-color="#0D9488"/>
+    </linearGradient>
+  </defs>
+
+  <!-- mark, scaled into ~150px box on the left -->
+  <g transform="translate(20,18) scale(0.32)">
+    <g>
+      <path d="M256 302 C 230 258 230 208 256 160 C 282 208 282 258 256 302 Z" fill="url(#leaf2)" transform="rotate(-34 256 302)" opacity="0.9"/>
+      <path d="M256 302 C 230 258 230 208 256 160 C 282 208 282 258 256 302 Z" fill="url(#leaf2)" transform="rotate(34 256 302)" opacity="0.9"/>
+      <path d="M256 304 C 228 254 228 198 256 146 C 284 198 284 254 256 304 Z" fill="url(#leaf2)"/>
+    </g>
+    <path d="M256 300 L150 316 Q138 345 142 374 L256 386 Z" fill="#0F3D38"/>
+    <path d="M256 300 L362 316 Q374 345 370 374 L256 386 Z" fill="#134E4A"/>
+    <line x1="256" y1="300" x2="256" y2="386" stroke="#0B2D2A" stroke-width="9" stroke-linecap="round"/>
+  </g>
+
+  <text x="185" y="118" font-family="'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="78" font-weight="600" letter-spacing="-1" fill="#0F3D38">Mangrove</text>
+</svg>

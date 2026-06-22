@@ -1,0 +1,493 @@
+using System.Globalization;
+using System.Text.Json;
+using Mangrove.Server.Data;
+using Mangrove.Server.Readers;
+using Mangrove.Server.Storage;
+using Microsoft.EntityFrameworkCore;
+
+namespace Mangrove.Server.Scanning;
+
+public sealed record ScanResult(int FilesSeen, int ChaptersAdded, int ChaptersUpdated, int ChaptersRemoved, int SeriesCount);
+
+/// <summary>
+/// Walks a library root through <see cref="IStorageProvider"/>, grouping content units (comic
+/// archives, books, and raw image folders) into Series → Volume → Chapter → MangaFile via
+/// <see cref="FilenameParser"/> (spec §8). Incremental: unchanged units are skipped. Extracts
+/// covers and ComicInfo/EPUB metadata on first sight.
+/// </summary>
+public sealed class LibraryScanner
+{
+    private readonly MangroveDbContext _db;
+    private readonly StorageProviderFactory _providers;
+    private readonly ReaderService _readers;
+    private readonly ComicInfoReader _comicInfo;
+    private readonly EpubService _epub;
+    private readonly ServerPaths _paths;
+    private readonly FilenameParser _parser;
+    private readonly ILogger<LibraryScanner> _logger;
+
+    private const int MaxDepth = 8;
+
+    public LibraryScanner(
+        MangroveDbContext db,
+        StorageProviderFactory providers,
+        ReaderService readers,
+        ComicInfoReader comicInfo,
+        EpubService epub,
+        ServerPaths paths,
+        FilenameParser parser,
+        ILogger<LibraryScanner> logger)
+    {
+        _db = db;
+        _providers = providers;
+        _readers = readers;
+        _comicInfo = comicInfo;
+        _epub = epub;
+        _paths = paths;
+        _parser = parser;
+        _logger = logger;
+    }
+
+    private sealed record ContentUnit(
+        string Path, string Name, bool IsFolder, long Size, DateTime LastModified,
+        int ImageCount, string Format, string[] Segments);
+
+    /// <summary>Runs a scan and records a <see cref="JobLog"/> entry for the tasks/history view.</summary>
+    public async Task<ScanResult> ScanAsync(int libraryId, CancellationToken ct = default)
+    {
+        var libName = await _db.Libraries.Where(l => l.Id == libraryId).Select(l => l.Name).FirstOrDefaultAsync(ct);
+        var job = new JobLog { Kind = "scan", Target = libName ?? $"library:{libraryId}", Status = "Running" };
+        _db.JobLogs.Add(job);
+        await _db.SaveChangesAsync(ct);
+
+        try
+        {
+            var result = await ScanCoreAsync(libraryId, ct);
+            job.Status = "Completed";
+            job.Message = $"{result.ChaptersAdded} added, {result.ChaptersUpdated} updated, {result.ChaptersRemoved} removed";
+            job.FinishedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            job.Status = "Failed";
+            job.Message = ex.Message;
+            job.FinishedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(CancellationToken.None);
+            throw;
+        }
+    }
+
+    private async Task<ScanResult> ScanCoreAsync(int libraryId, CancellationToken ct = default)
+    {
+        var library = await _db.Libraries
+            .Include(l => l.Credential)
+            .FirstOrDefaultAsync(l => l.Id == libraryId, ct)
+            ?? throw new InvalidOperationException($"Library {libraryId} not found.");
+
+        var provider = _providers.ForLibrary(library, library.Credential);
+
+        var units = new List<ContentUnit>();
+        await CollectUnitsAsync(provider, library.RootPath, library.RootPath, 0, units, ct);
+
+        var added = 0;
+        var updated = 0;
+        var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var unit in units)
+        {
+            ct.ThrowIfCancellationRequested();
+            seenPaths.Add(unit.Path);
+
+            var hash = ComputeHash(unit);
+            var existing = await _db.MangaFiles
+                .Include(f => f.Chapter)
+                .FirstOrDefaultAsync(f => f.StoragePath == unit.Path
+                    && f.Chapter.Volume.Series.LibraryId == library.Id, ct);
+
+            if (existing is not null && existing.Hash == hash)
+                continue; // unchanged — skip needless I/O (spec §8)
+
+            var (seriesName, parsed) = ResolveSeries(unit);
+
+            var series = await GetOrCreateSeriesAsync(library.Id, seriesName, ct);
+            var volume = await GetOrCreateVolumeAsync(series, parsed.Volume ?? 0, ct);
+            var chapter = await GetOrCreateChapterAsync(volume, parsed, unit, ct);
+
+            chapter.FileFormat = unit.Format;
+
+            try
+            {
+                chapter.PageCount = await _readers.CountPagesAsync(unit.Format, unit.Path, provider, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to count pages for '{Path}'", unit.Path);
+                chapter.PageCount = 0;
+            }
+
+            await _db.SaveChangesAsync(ct); // ensure chapter.Id for cover filenames
+
+            await CacheCoverAsync(series, chapter, unit, provider, ct);
+            await ApplyMetadataAsync(series, chapter, unit, provider, ct);
+
+            if (existing is null)
+            {
+                _db.MangaFiles.Add(new MangaFile
+                {
+                    ChapterId = chapter.Id,
+                    StoragePath = unit.Path,
+                    Bytes = unit.Size,
+                    Format = unit.Format,
+                    Hash = hash,
+                    LastModified = unit.LastModified,
+                });
+                added++;
+            }
+            else
+            {
+                existing.Bytes = unit.Size;
+                existing.Hash = hash;
+                existing.LastModified = unit.LastModified;
+                existing.ChapterId = chapter.Id;
+                existing.Format = unit.Format;
+                updated++;
+            }
+
+            await _db.SaveChangesAsync(ct);
+        }
+
+        // Prefer a series-level cover image (folder.jpg/cover.jpg/poster.jpg) when present — this is
+        // the common layout for manga folders (and matches Jellyfin/Kavita conventions).
+        await ApplyFolderCoversAsync(library, provider, units, ct);
+
+        var removed = await RemoveMissingAsync(library.Id, seenPaths, ct);
+
+        library.LastScanAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        var seriesCount = await _db.Series.CountAsync(s => s.LibraryId == library.Id, ct);
+        _logger.LogInformation(
+            "Scan of library {Library} complete: {Added} added, {Updated} updated, {Removed} removed",
+            library.Name, added, updated, removed);
+
+        return new ScanResult(units.Count, added, updated, removed, seriesCount);
+    }
+
+    private async Task CollectUnitsAsync(
+        IStorageProvider provider, string root, string path, int depth, List<ContentUnit> output, CancellationToken ct)
+    {
+        if (depth > MaxDepth) return;
+
+        IReadOnlyList<StorageEntry> entries;
+        try
+        {
+            entries = await provider.ListAsync(path, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to list '{Path}' during scan", path);
+            return;
+        }
+
+        // A raw-image-folder chapter is a leaf folder of page images. Exclude series cover art
+        // (folder.jpg/cover.jpg/...) and don't treat a folder that also holds archives/books as a
+        // chapter — that's a series/container folder, not a page folder.
+        var hasArchives = entries.Any(e => !e.IsDirectory && SupportedFormats.IsSupportedFile(e.Name));
+        var pageImages = entries
+            .Where(e => !e.IsDirectory && ImageFormats.IsImage(e.Name) && !IsCoverFileName(e.Name))
+            .ToList();
+        if (pageImages.Count > 0 && !hasArchives && !PathsEqual(path, root))
+        {
+            output.Add(new ContentUnit(
+                Path: path,
+                Name: LastSegment(path),
+                IsFolder: true,
+                Size: pageImages.Sum(f => f.Size),
+                LastModified: pageImages.Max(f => f.LastModified),
+                ImageCount: pageImages.Count,
+                Format: FormatRegistry.ImageFolderFormat,
+                Segments: RelativeSegments(root, path)));
+        }
+
+        foreach (var file in entries.Where(e => !e.IsDirectory && SupportedFormats.IsSupportedFile(e.Name)))
+        {
+            output.Add(new ContentUnit(
+                Path: file.FullPath,
+                Name: file.Name,
+                IsFolder: false,
+                Size: file.Size,
+                LastModified: file.LastModified,
+                ImageCount: 0,
+                Format: SupportedFormats.NormalizedExtension(file.Name).TrimStart('.'),
+                Segments: RelativeSegments(root, file.FullPath)));
+        }
+
+        foreach (var dir in entries.Where(e => e.IsDirectory))
+            await CollectUnitsAsync(provider, root, dir.FullPath, depth + 1, output, ct);
+    }
+
+    private (string SeriesName, ParsedInfo Parsed) ResolveSeries(ContentUnit unit)
+    {
+        if (unit.IsFolder)
+        {
+            var parsed = _parser.Parse(unit.Segments.Length > 0 ? unit.Segments[^1] : unit.Name);
+            var series = unit.Segments.Length >= 1 ? unit.Segments[0] : parsed.Series;
+            return (series, parsed);
+        }
+        else
+        {
+            var parsed = _parser.Parse(unit.Name);
+            var folderSegments = unit.Segments.Length > 0 ? unit.Segments[..^1] : Array.Empty<string>();
+            var series = folderSegments.Length >= 1 ? folderSegments[0] : parsed.Series;
+            return (series, parsed);
+        }
+    }
+
+    private async Task<Series> GetOrCreateSeriesAsync(int libraryId, string name, CancellationToken ct)
+    {
+        var existing = await _db.Series
+            .FirstOrDefaultAsync(s => s.LibraryId == libraryId && s.Name == name, ct);
+        if (existing is not null) return existing;
+
+        var series = new Series { LibraryId = libraryId, Name = name, SortName = name };
+        _db.Series.Add(series);
+        await _db.SaveChangesAsync(ct);
+        return series;
+    }
+
+    private async Task<Volume> GetOrCreateVolumeAsync(Series series, float number, CancellationToken ct)
+    {
+        var existing = await _db.Volumes
+            .FirstOrDefaultAsync(v => v.SeriesId == series.Id && v.Number == number, ct);
+        if (existing is not null) return existing;
+
+        var volume = new Volume { SeriesId = series.Id, Number = number };
+        _db.Volumes.Add(volume);
+        await _db.SaveChangesAsync(ct);
+        return volume;
+    }
+
+    private async Task<Chapter> GetOrCreateChapterAsync(
+        Volume volume, ParsedInfo parsed, ContentUnit unit, CancellationToken ct)
+    {
+        var number = parsed.Chapter ?? 0;
+        var title = parsed.IsSpecial ? StripExt(unit.Name) : null;
+
+        var existing = await _db.Chapters
+            .FirstOrDefaultAsync(c => c.VolumeId == volume.Id && c.Number == number && c.Title == title, ct);
+        if (existing is not null) return existing;
+
+        var chapter = new Chapter
+        {
+            VolumeId = volume.Id,
+            Number = number,
+            Title = title,
+            Range = number.ToString(CultureInfo.InvariantCulture),
+        };
+        _db.Chapters.Add(chapter);
+        await _db.SaveChangesAsync(ct);
+        return chapter;
+    }
+
+    // Series cover image filenames to look for, in order of preference.
+    private static readonly string[] CoverFileNames = { "folder", "cover", "poster", "default" };
+
+    /// <summary>
+    /// For each series in this scan, if its top-level folder contains a cover image
+    /// (folder.jpg/cover.jpg/poster.jpg), use it as the series cover, overriding any extracted page.
+    /// Runs on every scan (including incremental) so existing libraries pick up folder art too.
+    /// </summary>
+    private async Task ApplyFolderCoversAsync(
+        Library library, IStorageProvider provider, List<ContentUnit> units, CancellationToken ct)
+    {
+        var seriesDirs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var unit in units)
+        {
+            if (unit.Segments.Length == 0) continue;
+            // Needs a containing series folder: folder-units always have one; file-units need >= 2 segments.
+            if (!unit.IsFolder && unit.Segments.Length < 2) continue;
+            var (seriesName, _) = ResolveSeries(unit);
+            if (!seriesDirs.ContainsKey(seriesName))
+                seriesDirs[seriesName] = JoinPath(library.RootPath, unit.Segments[0]);
+        }
+
+        foreach (var (seriesName, dir) in seriesDirs)
+        {
+            ct.ThrowIfCancellationRequested();
+            var series = await _db.Series
+                .FirstOrDefaultAsync(s => s.LibraryId == library.Id && s.Name == seriesName, ct);
+            if (series is null) continue;
+
+            try
+            {
+                var entries = await provider.ListAsync(dir, ct);
+                var coverEntry = FindCoverImage(entries);
+                if (coverEntry is null) continue;
+
+                await using var stream = await provider.OpenReadAsync(coverEntry.FullPath, ct);
+                using var ms = new MemoryStream();
+                await stream.CopyToAsync(ms, ct);
+
+                var resized = ImageHelper.ResizeCover(ms.ToArray());
+                var seriesCover = _paths.CoverFileForSeries(series.Id);
+                await File.WriteAllBytesAsync(seriesCover, resized, ct);
+                series.CoverPath = seriesCover;
+                await _db.SaveChangesAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to apply folder cover for series '{Series}' from '{Dir}'", seriesName, dir);
+            }
+        }
+    }
+
+    private static StorageEntry? FindCoverImage(IReadOnlyList<StorageEntry> entries)
+    {
+        var images = entries.Where(e => !e.IsDirectory && ImageFormats.IsImage(e.Name)).ToList();
+        foreach (var preferred in CoverFileNames)
+        {
+            var match = images.FirstOrDefault(e =>
+                Path.GetFileNameWithoutExtension(e.Name).Equals(preferred, StringComparison.OrdinalIgnoreCase));
+            if (match is not null) return match;
+        }
+        return null;
+    }
+
+    private static bool IsCoverFileName(string fileName)
+    {
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        return CoverFileNames.Contains(stem, StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string JoinPath(string root, string segment)
+    {
+        var r = root.Replace('/', '\\').TrimEnd('\\');
+        return $"{r}\\{segment}";
+    }
+
+    private async Task CacheCoverAsync(
+        Series series, Chapter chapter, ContentUnit unit, IStorageProvider provider, CancellationToken ct)
+    {
+        try
+        {
+            var raw = await _readers.GetRawCoverAsync(unit.Format, unit.Path, provider, ct);
+            if (raw is null) return;
+
+            var resized = ImageHelper.ResizeCover(raw);
+            var chapterCover = _paths.CoverFileForChapter(chapter.Id);
+            await File.WriteAllBytesAsync(chapterCover, resized, ct);
+            chapter.CoverPath = chapterCover;
+
+            if (string.IsNullOrEmpty(series.CoverPath))
+            {
+                var seriesCover = _paths.CoverFileForSeries(series.Id);
+                await File.WriteAllBytesAsync(seriesCover, resized, ct);
+                series.CoverPath = seriesCover;
+            }
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to cache cover for chapter {Chapter}", chapter.Id);
+        }
+    }
+
+    private async Task ApplyMetadataAsync(
+        Series series, Chapter chapter, ContentUnit unit, IStorageProvider provider, CancellationToken ct)
+    {
+        if (series.MetadataLocked) return;
+
+        try
+        {
+            var kind = FormatRegistry.FromFormat(unit.Format);
+            if (kind == MediaKind.ComicArchive)
+            {
+                await using var stream = await provider.OpenReadAsync(unit.Path, ct);
+                var ci = _comicInfo.ReadFromArchive(stream);
+                if (ci is null) return;
+
+                if (ci.Summary is not null) series.Summary = ci.Summary;
+                if (ci.Publisher is not null) series.Publisher = ci.Publisher;
+                if (ci.Language is not null) series.Language = ci.Language;
+                if (ci.Genre is not null) series.Genres = ci.Genre;
+                if (ci.Tags is not null) series.Tags = ci.Tags;
+                if (ci.AgeRating is not null)
+                {
+                    series.AgeRating = ci.AgeRating;
+                    series.AgeRatingTier = AgeRatingMap.Tier(ci.AgeRating);
+                }
+                if (ci.Writer is not null || ci.Penciller is not null)
+                    series.People = JsonSerializer.Serialize(new { writer = ci.Writer, penciller = ci.Penciller });
+                if (ci.Title is not null) chapter.Title = ci.Title;
+                series.UpdatedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync(ct);
+            }
+            else if (kind == MediaKind.Epub)
+            {
+                await using var stream = await provider.OpenReadAsync(unit.Path, ct);
+                var meta = await _epub.ReadMetadataAsync(stream, ct);
+                if (meta.Description is not null) series.Summary = meta.Description;
+                if (meta.Publisher is not null) series.Publisher = meta.Publisher;
+                if (meta.Language is not null) series.Language = meta.Language;
+                if (meta.Author is not null)
+                    series.People = JsonSerializer.Serialize(new { writer = meta.Author });
+                series.UpdatedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync(ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to read metadata for '{Path}'", unit.Path);
+        }
+    }
+
+    private async Task<int> RemoveMissingAsync(int libraryId, HashSet<string> seenPaths, CancellationToken ct)
+    {
+        var dbFiles = await _db.MangaFiles
+            .Include(f => f.Chapter).ThenInclude(c => c.Volume).ThenInclude(v => v.Series)
+            .Where(f => f.Chapter.Volume.Series.LibraryId == libraryId)
+            .ToListAsync(ct);
+
+        var removed = 0;
+        foreach (var file in dbFiles)
+        {
+            if (seenPaths.Contains(file.StoragePath)) continue;
+            _db.Chapters.Remove(file.Chapter);
+            removed++;
+        }
+        if (removed > 0) await _db.SaveChangesAsync(ct);
+        return removed;
+    }
+
+    private static string ComputeHash(ContentUnit unit) => unit.IsFolder
+        ? $"dir:{unit.Size}:{unit.LastModified.Ticks}:{unit.ImageCount}"
+        : $"{unit.Size}:{unit.LastModified.Ticks}";
+
+    private static string[] RelativeSegments(string root, string full)
+    {
+        var r = root.Replace('/', '\\').TrimEnd('\\');
+        var f = full.Replace('/', '\\');
+        var rel = f.StartsWith(r, StringComparison.OrdinalIgnoreCase) ? f[r.Length..] : f;
+        return rel.Split('\\', StringSplitOptions.RemoveEmptyEntries);
+    }
+
+    private static bool PathsEqual(string a, string b) =>
+        string.Equals(a.Replace('/', '\\').TrimEnd('\\'), b.Replace('/', '\\').TrimEnd('\\'),
+            StringComparison.OrdinalIgnoreCase);
+
+    private static string LastSegment(string path)
+    {
+        var p = path.Replace('/', '\\').TrimEnd('\\');
+        var idx = p.LastIndexOf('\\');
+        return idx >= 0 ? p[(idx + 1)..] : p;
+    }
+
+    private static string StripExt(string fileName)
+    {
+        if (fileName.EndsWith(".tar.gz", StringComparison.OrdinalIgnoreCase)) return fileName[..^7];
+        var ext = Path.GetExtension(fileName);
+        return string.IsNullOrEmpty(ext) ? fileName : fileName[..^ext.Length];
+    }
+}

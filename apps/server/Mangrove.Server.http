@@ -1,0 +1,6 @@
+@Mangrove.Server_HostAddress = http://localhost:5262
+
+GET {{Mangrove.Server_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
