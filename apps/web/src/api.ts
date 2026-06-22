@@ -82,6 +82,9 @@ export interface SeriesDetailDto {
   myStars?: number | null;
   myReview?: string | null;
   wantToRead: boolean;
+  language?: string | null;
+  writer?: string | null;
+  penciller?: string | null;
 }
 
 export interface AdminUserDto {

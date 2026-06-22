@@ -85,8 +85,12 @@ data class SeriesDetailDto(
     val hasCover: Boolean = false,
     val volumes: List<VolumeDto> = emptyList(),
     val genres: String? = null,
+    val tags: String? = null,
     val publisher: String? = null,
     val ageRating: String? = null,
+    val language: String? = null,
+    val writer: String? = null,
+    val penciller: String? = null,
 )
 
 @Serializable

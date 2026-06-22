@@ -40,7 +40,7 @@ public sealed record SeriesDetailDto(
     int Id, int LibraryId, string Name, string? Summary, bool HasCover, IReadOnlyList<VolumeDto> Volumes,
     string? Genres = null, string? Tags = null, string? Publisher = null, string? AgeRating = null,
     double? AverageRating = null, int RatingCount = 0, int? MyStars = null, string? MyReview = null,
-    bool WantToRead = false);
+    bool WantToRead = false, string? Language = null, string? Writer = null, string? Penciller = null);
 public sealed record VolumeDto(int Id, float Number, string? Name, IReadOnlyList<ChapterDto> Chapters);
 public sealed record ChapterDto(int Id, float Number, string? Title, int PageCount, string FileFormat, bool HasCover);
 

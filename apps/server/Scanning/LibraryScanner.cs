@@ -94,6 +94,7 @@ public sealed class LibraryScanner
         var added = 0;
         var updated = 0;
         var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var folderCoverTried = new HashSet<int>();
 
         foreach (var unit in units)
         {
@@ -112,6 +113,13 @@ public sealed class LibraryScanner
             var (seriesName, parsed) = ResolveSeries(unit);
 
             var series = await GetOrCreateSeriesAsync(library.Id, seriesName, ct);
+
+            // Apply the series-level cover (folder.jpg/cover.jpg/...) the first time we see a series,
+            // BEFORE caching any chapter page — so a real cover always wins over an extracted page, and
+            // covers land immediately rather than only after the whole (slow, interruptible) scan. The
+            // end-of-scan pass below is kept as a safety net (e.g. art added after the initial scan).
+            if (folderCoverTried.Add(series.Id) && TryGetSeriesDir(library, unit, out var seriesDir))
+                await TryApplyFolderCoverAsync(series, seriesDir, provider, ct);
             var volume = await GetOrCreateVolumeAsync(series, parsed.Volume ?? 0, ct);
             var chapter = await GetOrCreateChapterAsync(volume, parsed, unit, ct);
 
@@ -158,9 +166,10 @@ public sealed class LibraryScanner
             await _db.SaveChangesAsync(ct);
         }
 
-        // Prefer a series-level cover image (folder.jpg/cover.jpg/poster.jpg) when present — this is
-        // the common layout for manga folders (and matches Jellyfin/Kavita conventions).
-        await ApplyFolderCoversAsync(library, provider, units, ct);
+        // Apply series-level sidecar assets sitting next to the chapters: a cover image
+        // (folder.jpg/cover.jpg/poster.jpg) and a ComicInfo.xml metadata file. This is the common
+        // manga layout (and matches Jellyfin/Kavita conventions).
+        await ApplyFolderAssetsAsync(library, provider, units, ct);
 
         var removed = await RemoveMissingAsync(library.Id, seenPaths, ct);
 
@@ -295,22 +304,19 @@ public sealed class LibraryScanner
     private static readonly string[] CoverFileNames = { "folder", "cover", "poster", "default" };
 
     /// <summary>
-    /// For each series in this scan, if its top-level folder contains a cover image
-    /// (folder.jpg/cover.jpg/poster.jpg), use it as the series cover, overriding any extracted page.
-    /// Runs on every scan (including incremental) so existing libraries pick up folder art too.
+    /// For each series in this scan, reads its top-level folder for sidecar assets: a cover image
+    /// (folder.jpg/cover.jpg/poster.jpg) and a series-level <c>ComicInfo.xml</c>. Runs on every scan
+    /// (including incremental) so existing libraries pick up art and metadata added after the first scan.
     /// </summary>
-    private async Task ApplyFolderCoversAsync(
+    private async Task ApplyFolderAssetsAsync(
         Library library, IStorageProvider provider, List<ContentUnit> units, CancellationToken ct)
     {
         var seriesDirs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var unit in units)
         {
-            if (unit.Segments.Length == 0) continue;
-            // Needs a containing series folder: folder-units always have one; file-units need >= 2 segments.
-            if (!unit.IsFolder && unit.Segments.Length < 2) continue;
+            if (!TryGetSeriesDir(library, unit, out var dir)) continue;
             var (seriesName, _) = ResolveSeries(unit);
-            if (!seriesDirs.ContainsKey(seriesName))
-                seriesDirs[seriesName] = JoinPath(library.RootPath, unit.Segments[0]);
+            seriesDirs.TryAdd(seriesName, dir);
         }
 
         foreach (var (seriesName, dir) in seriesDirs)
@@ -320,26 +326,138 @@ public sealed class LibraryScanner
                 .FirstOrDefaultAsync(s => s.LibraryId == library.Id && s.Name == seriesName, ct);
             if (series is null) continue;
 
+            IReadOnlyList<StorageEntry> entries;
             try
             {
-                var entries = await provider.ListAsync(dir, ct);
-                var coverEntry = FindCoverImage(entries);
-                if (coverEntry is null) continue;
-
-                await using var stream = await provider.OpenReadAsync(coverEntry.FullPath, ct);
-                using var ms = new MemoryStream();
-                await stream.CopyToAsync(ms, ct);
-
-                var resized = ImageHelper.ResizeCover(ms.ToArray());
-                var seriesCover = _paths.CoverFileForSeries(series.Id);
-                await File.WriteAllBytesAsync(seriesCover, resized, ct);
-                series.CoverPath = seriesCover;
-                await _db.SaveChangesAsync(ct);
+                entries = await provider.ListAsync(dir, ct);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to apply folder cover for series '{Series}' from '{Dir}'", seriesName, dir);
+                _logger.LogWarning(ex, "Failed to list series folder '{Dir}' for assets", dir);
+                continue;
             }
+
+            await TryApplyFolderCoverAsync(series, entries, provider, ct);
+            await TryApplySidecarMetadataAsync(series, entries, provider, ct);
+        }
+    }
+
+    /// <summary>
+    /// Resolves the on-disk series folder for a unit (the top-level folder under the library root), or
+    /// false when the unit isn't inside a series folder (a loose file directly in the root).
+    /// </summary>
+    private static bool TryGetSeriesDir(Library library, ContentUnit unit, out string dir)
+    {
+        dir = string.Empty;
+        if (unit.Segments.Length == 0) return false;
+        // Needs a containing series folder: folder-units always have one; file-units need >= 2 segments.
+        if (!unit.IsFolder && unit.Segments.Length < 2) return false;
+        dir = JoinPath(library.RootPath, unit.Segments[0]);
+        return true;
+    }
+
+    /// <summary>
+    /// Lists <paramref name="dir"/> and applies a series-level cover image when present. Convenience
+    /// wrapper used during the main scan loop (where entries haven't been listed yet).
+    /// </summary>
+    private async Task<bool> TryApplyFolderCoverAsync(
+        Series series, string dir, IStorageProvider provider, CancellationToken ct)
+    {
+        try
+        {
+            var entries = await provider.ListAsync(dir, ct);
+            return await TryApplyFolderCoverAsync(series, entries, provider, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to apply folder cover for series '{Series}' from '{Dir}'", series.Name, dir);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Looks for a series-level cover image (folder.jpg/cover.jpg/...) among <paramref name="entries"/>
+    /// and, if found, makes it the series cover — overriding any page extracted from a chapter. Returns
+    /// true when a cover was applied. Failures are logged and swallowed so one bad folder can't fail the scan.
+    /// </summary>
+    private async Task<bool> TryApplyFolderCoverAsync(
+        Series series, IReadOnlyList<StorageEntry> entries, IStorageProvider provider, CancellationToken ct)
+    {
+        try
+        {
+            var coverEntry = FindCoverImage(entries);
+            if (coverEntry is null) return false;
+
+            await using var stream = await provider.OpenReadAsync(coverEntry.FullPath, ct);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms, ct);
+
+            var resized = ImageHelper.ResizeCover(ms.ToArray());
+            var seriesCover = _paths.CoverFileForSeries(series.Id);
+            await File.WriteAllBytesAsync(seriesCover, resized, ct);
+            series.CoverPath = seriesCover;
+            await _db.SaveChangesAsync(ct);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to apply folder cover for series '{Series}'", series.Name);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Reads a series-level sidecar <c>ComicInfo.xml</c> (sitting next to the chapter archives, the layout
+    /// produced by many downloaders) and fills in series metadata. Uses fallback semantics: only fields
+    /// not already populated by a chapter's embedded ComicInfo.xml are filled, so CBZ-level data wins.
+    /// User-locked series are left untouched. Failures are logged and swallowed.
+    /// </summary>
+    private async Task TryApplySidecarMetadataAsync(
+        Series series, IReadOnlyList<StorageEntry> entries, IStorageProvider provider, CancellationToken ct)
+    {
+        if (series.MetadataLocked) return;
+
+        var sidecar = entries.FirstOrDefault(e => !e.IsDirectory &&
+            Path.GetFileName(e.Name).Equals("ComicInfo.xml", StringComparison.OrdinalIgnoreCase));
+        if (sidecar is null) return;
+
+        try
+        {
+            await using var stream = await provider.OpenReadAsync(sidecar.FullPath, ct);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms, ct);
+            ms.Position = 0;
+
+            var ci = _comicInfo.Parse(ms);
+            if (ci is null) return;
+
+            var changed = false;
+            if (string.IsNullOrEmpty(series.Summary) && ci.Summary is not null) { series.Summary = ci.Summary; changed = true; }
+            if (string.IsNullOrEmpty(series.Publisher) && ci.Publisher is not null) { series.Publisher = ci.Publisher; changed = true; }
+            if (string.IsNullOrEmpty(series.Language) && ci.Language is not null) { series.Language = ci.Language; changed = true; }
+            if (string.IsNullOrEmpty(series.Genres) && ci.Genre is not null) { series.Genres = ci.Genre; changed = true; }
+            if (string.IsNullOrEmpty(series.Tags) && ci.Tags is not null) { series.Tags = ci.Tags; changed = true; }
+            if (string.IsNullOrEmpty(series.AgeRating) && ci.AgeRating is not null)
+            {
+                series.AgeRating = ci.AgeRating;
+                series.AgeRatingTier = AgeRatingMap.Tier(ci.AgeRating);
+                changed = true;
+            }
+            if (string.IsNullOrEmpty(series.People) && (ci.Writer is not null || ci.Penciller is not null))
+            {
+                series.People = JsonSerializer.Serialize(new { writer = ci.Writer, penciller = ci.Penciller });
+                changed = true;
+            }
+
+            if (changed)
+            {
+                series.UpdatedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync(ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to apply sidecar ComicInfo.xml for series '{Series}'", series.Name);
         }
     }
 

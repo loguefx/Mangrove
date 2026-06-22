@@ -115,10 +115,25 @@ fun SeriesScreen(container: AppContainer, nav: NavController, seriesId: Int) {
                                 }
                             }
                             Column(Modifier.padding(start = 16.dp)) {
+                                listOfNotNull(
+                                    d.ageRating?.takeIf { it.isNotBlank() },
+                                    d.language?.takeIf { it.isNotBlank() }?.uppercase(),
+                                ).takeIf { it.isNotEmpty() }?.let {
+                                    Text(it.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
                                 d.publisher?.takeIf { it.isNotBlank() }?.let {
-                                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                                }
+                                listOfNotNull(
+                                    d.writer?.takeIf { it.isNotBlank() }?.let { "Story: $it" },
+                                    d.penciller?.takeIf { it.isNotBlank() }?.let { "Art: $it" },
+                                ).forEach {
+                                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
                                 }
                                 d.genres?.takeIf { it.isNotBlank() }?.let {
+                                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                                }
+                                d.tags?.takeIf { it.isNotBlank() }?.let {
                                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
                                 }
                                 Text("${rows.size} chapters", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 8.dp))

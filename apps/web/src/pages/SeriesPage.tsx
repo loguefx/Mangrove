@@ -108,11 +108,16 @@ export default function SeriesPage() {
             <AddToCollection seriesId={series.id} />
           </div>
 
-          {(series.genres || series.publisher || series.ageRating) && (
+          {(series.genres || series.tags || series.publisher || series.ageRating || series.language) && (
             <div className="mt-3 flex flex-wrap gap-2 text-xs">
               {series.ageRating && (
                 <span className="rounded-full bg-neutral-800 px-2 py-0.5 text-neutral-300">
                   {series.ageRating}
+                </span>
+              )}
+              {series.language && (
+                <span className="rounded-full bg-neutral-800 px-2 py-0.5 uppercase text-neutral-300">
+                  {series.language}
                 </span>
               )}
               {series.publisher && (
@@ -121,11 +126,32 @@ export default function SeriesPage() {
                 </span>
               )}
               {series.genres?.split(",").filter(Boolean).map((g) => (
-                <span key={g} className="rounded-full bg-neutral-800 px-2 py-0.5 text-neutral-400">
+                <span key={`g-${g}`} className="rounded-full bg-neutral-800 px-2 py-0.5 text-neutral-400">
                   {g.trim()}
                 </span>
               ))}
+              {series.tags?.split(",").filter(Boolean).map((t) => (
+                <span key={`t-${t}`} className="rounded-full bg-teal/15 px-2 py-0.5 text-teal-mint">
+                  {t.trim()}
+                </span>
+              ))}
             </div>
+          )}
+
+          {(series.writer || series.penciller) && (
+            <p className="mt-2 text-sm text-neutral-500">
+              {series.writer && (
+                <>
+                  Story <span className="text-neutral-300">{series.writer}</span>
+                </>
+              )}
+              {series.writer && series.penciller && <span className="px-1.5">·</span>}
+              {series.penciller && (
+                <>
+                  Art <span className="text-neutral-300">{series.penciller}</span>
+                </>
+              )}
+            </p>
           )}
 
           {series.summary && <p className="mt-3 max-w-2xl text-neutral-400">{series.summary}</p>}
@@ -400,6 +426,7 @@ function MetadataEditor({
   const [genres, setGenres] = useState(series.genres ?? "");
   const [tags, setTags] = useState(series.tags ?? "");
   const [publisher, setPublisher] = useState(series.publisher ?? "");
+  const [language, setLanguage] = useState(series.language ?? "");
   const [ageRating, setAgeRating] = useState(series.ageRating ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -414,6 +441,7 @@ function MetadataEditor({
         genres: genres || null,
         tags: tags || null,
         publisher: publisher || null,
+        language: language || null,
         ageRating: ageRating || null,
       });
       onSaved(updated);
@@ -457,6 +485,15 @@ function MetadataEditor({
         <label className="text-sm">
           <span className="mb-1 block text-neutral-400">Tags (comma-separated)</span>
           <input value={tags} onChange={(e) => setTags(e.target.value)} className="input" />
+        </label>
+        <label className="text-sm">
+          <span className="mb-1 block text-neutral-400">Language (ISO)</span>
+          <input
+            value={language}
+            onChange={(e) => setLanguage(e.target.value)}
+            placeholder="e.g. en, ja"
+            className="input"
+          />
         </label>
         <label className="text-sm">
           <span className="mb-1 block text-neutral-400">Age rating</span>

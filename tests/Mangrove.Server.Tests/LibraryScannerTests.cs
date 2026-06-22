@@ -70,6 +70,54 @@ public class LibraryScannerTests : IDisposable
         }
     }
 
+    private async Task WriteSidecarAsync(
+        string seriesFolder, string? summary = null, string? writer = null, string? penciller = null,
+        string? publisher = null, string? genre = null, string? tags = null, string? languageIso = null,
+        string? ageRating = null)
+    {
+        var dir = Path.Combine(_root, seriesFolder);
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(dir, "ComicInfo.xml"),
+            BuildComicInfoXml(summary, writer, penciller, publisher, genre, tags, languageIso, ageRating));
+    }
+
+    private void CreateCbzWithComicInfo(
+        string seriesFolder, string fileName, int pageCount, string? summary = null, string? writer = null,
+        string? publisher = null)
+    {
+        var dir = Path.Combine(_root, seriesFolder);
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, fileName);
+        using var zip = ZipFile.Open(path, ZipArchiveMode.Create);
+        for (var i = 1; i <= pageCount; i++)
+        {
+            var entry = zip.CreateEntry($"{i:00}.jpg");
+            using var s = entry.Open();
+            s.Write(new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4 });
+        }
+        var ci = zip.CreateEntry("ComicInfo.xml");
+        using var cs = new StreamWriter(ci.Open());
+        cs.Write(BuildComicInfoXml(summary, writer, null, publisher, null, null, null, null));
+    }
+
+    private static string BuildComicInfoXml(
+        string? summary, string? writer, string? penciller, string? publisher, string? genre,
+        string? tags, string? languageIso, string? ageRating)
+    {
+        string El(string name, string? value) =>
+            string.IsNullOrEmpty(value) ? "" : $"  <{name}>{System.Security.SecurityElement.Escape(value)}</{name}>\n";
+        return "<?xml version=\"1.0\"?>\n<ComicInfo>\n"
+            + El("Summary", summary)
+            + El("Writer", writer)
+            + El("Penciller", penciller)
+            + El("Publisher", publisher)
+            + El("Genre", genre)
+            + El("Tags", tags)
+            + El("LanguageISO", languageIso)
+            + El("AgeRating", ageRating)
+            + "</ComicInfo>\n";
+    }
+
     private async Task<int> CreateLibraryAsync()
     {
         var lib = new Library
@@ -101,6 +149,74 @@ public class LibraryScannerTests : IDisposable
         var chapter = series.Volumes.SelectMany(v => v.Chapters).Single();
         Assert.Equal(3, chapter.PageCount);
         Assert.Equal("cbz", chapter.FileFormat);
+    }
+
+    [Fact]
+    public async Task Scan_UsesFolderImageAsSeriesCover_NotChapterPage()
+    {
+        // A series folder with chapter archives AND a folder.jpg cover. The series cover must be the
+        // folder image (regression: it was previously falling back to a chapter's first page).
+        CreateCbz("Demo Series", "Demo Series Vol.01 Ch.0001.cbz", 3);
+        var folderBytes = new byte[] { 0xFF, 0xD8, 0xFF, 0xDB, 11, 22, 33, 44, 55, 66, 77, 88, 99, 0, 1, 2 };
+        await File.WriteAllBytesAsync(Path.Combine(_root, "Demo Series", "folder.jpg"), folderBytes);
+
+        var libId = await CreateLibraryAsync();
+        await BuildScanner().ScanAsync(libId);
+
+        var series = await _db.Series.SingleAsync();
+        Assert.False(string.IsNullOrEmpty(series.CoverPath));
+        // Undecodable bytes pass through ResizeCover unchanged, so the cached cover is byte-identical
+        // to folder.jpg — proving the folder image (not a chapter page) was chosen.
+        Assert.Equal(folderBytes, await File.ReadAllBytesAsync(series.CoverPath!));
+
+        // The folder image must not be mistaken for a chapter.
+        Assert.Equal(1, await _db.Chapters.CountAsync());
+    }
+
+    [Fact]
+    public async Task Scan_ReadsSidecarComicInfo_AndFillsSeriesMetadata()
+    {
+        CreateCbz("Blue Lock", "Blue Lock - Chapter 001.cbz", 2);
+        await WriteSidecarAsync("Blue Lock",
+            summary: "Soccer battle royale.",
+            writer: "Muneyuki Kaneshiro",
+            penciller: "Yusuke Nomura",
+            publisher: "Kodansha",
+            genre: "Sports, Drama",
+            tags: "soccer, shounen",
+            languageIso: "en",
+            ageRating: "Teen");
+
+        var libId = await CreateLibraryAsync();
+        await BuildScanner().ScanAsync(libId);
+
+        var series = await _db.Series.SingleAsync(s => s.Name == "Blue Lock");
+        Assert.Equal("Soccer battle royale.", series.Summary);
+        Assert.Equal("Kodansha", series.Publisher);
+        Assert.Equal("Sports, Drama", series.Genres);
+        Assert.Equal("soccer, shounen", series.Tags);
+        Assert.Equal("en", series.Language);
+        Assert.Equal("Teen", series.AgeRating);
+        Assert.Contains("Muneyuki Kaneshiro", series.People);
+        Assert.Contains("Yusuke Nomura", series.People);
+    }
+
+    [Fact]
+    public async Task Scan_SidecarIsFallback_CbzMetadataWins()
+    {
+        // The CBZ carries its own ComicInfo.xml (Summary). The sidecar provides a different Summary plus
+        // a Publisher the CBZ lacks. The CBZ summary must win; the sidecar fills only the gap (Publisher).
+        CreateCbzWithComicInfo("Chainsaw Man", "Chainsaw Man - Chapter 001.cbz", 2,
+            summary: "From the CBZ.");
+        await WriteSidecarAsync("Chainsaw Man",
+            summary: "From the sidecar.", publisher: "Shueisha");
+
+        var libId = await CreateLibraryAsync();
+        await BuildScanner().ScanAsync(libId);
+
+        var series = await _db.Series.SingleAsync(s => s.Name == "Chainsaw Man");
+        Assert.Equal("From the CBZ.", series.Summary);   // CBZ takes precedence
+        Assert.Equal("Shueisha", series.Publisher);      // sidecar fills the gap
     }
 
     [Fact]

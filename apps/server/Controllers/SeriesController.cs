@@ -83,10 +83,32 @@ public sealed class SeriesController : ControllerBase
         double? avg = ratings.Count > 0 ? Math.Round(ratings.Average(r => r.Stars), 2) : null;
         var mine = ratings.FirstOrDefault(r => r.UserId == userId);
         var wantToRead = await _db.WantToRead.AnyAsync(w => w.UserId == userId && w.SeriesId == series.Id, ct);
+        var (writer, penciller) = ParsePeople(series.People);
 
         return new SeriesDetailDto(
             series.Id, series.LibraryId, series.Name, series.Summary, series.CoverPath != null, volumes,
             series.Genres, series.Tags, series.Publisher, series.AgeRating,
-            avg, ratings.Count, mine?.Stars, mine?.Body, wantToRead);
+            avg, ratings.Count, mine?.Stars, mine?.Body, wantToRead,
+            series.Language, writer, penciller);
+    }
+
+    /// <summary>Extracts writer/penciller from the <see cref="Series.People"/> JSON blob, if present.</summary>
+    private static (string? Writer, string? Penciller) ParsePeople(string? peopleJson)
+    {
+        if (string.IsNullOrWhiteSpace(peopleJson)) return (null, null);
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(peopleJson);
+            var root = doc.RootElement;
+            string? Get(string name) =>
+                root.TryGetProperty(name, out var el) && el.ValueKind == System.Text.Json.JsonValueKind.String
+                    ? el.GetString()
+                    : null;
+            return (Get("writer"), Get("penciller"));
+        }
+        catch
+        {
+            return (null, null);
+        }
     }
 }
