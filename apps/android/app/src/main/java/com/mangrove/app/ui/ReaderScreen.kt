@@ -1,8 +1,11 @@
 package com.mangrove.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
@@ -116,6 +119,15 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
                 scale = scale,
                 offset = offset,
                 onChange = { s, o -> scale = s; offset = o },
+                onTapSide = { isRight ->
+                    // Tapping a side turns the page; right advances reading order (flipped for RTL).
+                    val forward = if (rtl) !isRight else isRight
+                    val target = (pagerState.currentPage + if (forward) 1 else -1)
+                        .coerceIn(0, m.pageCount - 1)
+                    if (target != pagerState.currentPage) {
+                        scope.launch { pagerState.animateScrollToPage(target) }
+                    }
+                },
             ) {
                 if (offline) {
                     FileImage(
@@ -182,14 +194,20 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
 }
 
 /**
- * Wraps a page image with pinch-to-zoom, drag-to-pan, and double-tap-to-toggle-zoom.
- * Zoom/pan state is hoisted so the pager can disable swiping while the page is zoomed.
+ * Wraps a page image with:
+ *  - tap on the left/right side to turn pages (works at any zoom),
+ *  - double-tap to toggle zoom,
+ *  - pinch (two fingers) to zoom, and drag to pan once zoomed in.
+ *
+ * Single-finger drags are left unconsumed when not zoomed so the pager can still
+ * swipe between pages; they only pan once zoomed in.
  */
 @Composable
 private fun ZoomableImage(
     scale: Float,
     offset: Offset,
     onChange: (Float, Offset) -> Unit,
+    onTapSide: (isRight: Boolean) -> Unit,
     content: @Composable () -> Unit,
 ) {
     val curScale by rememberUpdatedState(scale)
@@ -197,6 +215,14 @@ private fun ZoomableImage(
     BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         val maxW = constraints.maxWidth.toFloat()
         val maxH = constraints.maxHeight.toFloat()
+
+        fun clampOffset(s: Float, o: Offset): Offset {
+            if (s <= 1f) return Offset.Zero
+            val maxX = maxW * (s - 1f) / 2f
+            val maxY = maxH * (s - 1f) / 2f
+            return Offset(o.x.coerceIn(-maxX, maxX), o.y.coerceIn(-maxY, maxY))
+        }
+
         Box(
             Modifier
                 .fillMaxSize()
@@ -207,27 +233,36 @@ private fun ZoomableImage(
                     translationY = offset.y
                 }
                 .pointerInput(Unit) {
-                    detectTransformGestures { _, pan, zoom, _ ->
-                        val newScale = (curScale * zoom).coerceIn(1f, 5f)
-                        val newOffset = if (newScale <= 1f) {
-                            Offset.Zero
-                        } else {
-                            val maxX = maxW * (newScale - 1f) / 2f
-                            val maxY = maxH * (newScale - 1f) / 2f
-                            Offset(
-                                (curOffset.x + pan.x).coerceIn(-maxX, maxX),
-                                (curOffset.y + pan.y).coerceIn(-maxY, maxY),
-                            )
-                        }
-                        onChange(newScale, newOffset)
-                    }
-                }
-                .pointerInput(Unit) {
                     detectTapGestures(
                         onDoubleTap = {
                             if (curScale > 1f) onChange(1f, Offset.Zero) else onChange(2.5f, Offset.Zero)
                         },
+                        onTap = { pos -> onTapSide(pos.x > size.width / 2f) },
                     )
+                }
+                .pointerInput(Unit) {
+                    awaitEachGesture {
+                        awaitFirstDown(requireUnconsumed = false)
+                        do {
+                            val event = awaitPointerEvent()
+                            val pressed = event.changes.count { it.pressed }
+                            if (pressed >= 2) {
+                                val zoom = event.calculateZoom()
+                                val pan = event.calculatePan()
+                                if (zoom != 1f || pan != Offset.Zero) {
+                                    val newScale = (curScale * zoom).coerceIn(1f, 5f)
+                                    onChange(newScale, clampOffset(newScale, curOffset + pan))
+                                    event.changes.forEach { it.consume() }
+                                }
+                            } else if (pressed == 1 && curScale > 1f) {
+                                val pan = event.calculatePan()
+                                if (pan != Offset.Zero) {
+                                    onChange(curScale, clampOffset(curScale, curOffset + pan))
+                                    event.changes.forEach { it.consume() }
+                                }
+                            }
+                        } while (event.changes.any { it.pressed })
+                    }
                 },
             contentAlignment = Alignment.Center,
         ) { content() }
