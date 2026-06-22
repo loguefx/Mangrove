@@ -1,7 +1,10 @@
 package com.mangrove.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,15 +22,20 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -81,6 +89,14 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
 
     val pagerState = rememberPagerState(initialPage = startPage.coerceIn(0, m.pageCount - 1)) { m.pageCount }
 
+    // Pinch-to-zoom / pan state for the current page. Reset when the page changes.
+    var scale by remember { mutableFloatStateOf(1f) }
+    var offset by remember { mutableStateOf(Offset.Zero) }
+    LaunchedEffect(pagerState.currentPage) {
+        scale = 1f
+        offset = Offset.Zero
+    }
+
     // Persist progress whenever the settled page changes.
     LaunchedEffect(pagerState, chapterId) {
         snapshotFlow { pagerState.currentPage }
@@ -92,24 +108,32 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
         HorizontalPager(
             state = pagerState,
             reverseLayout = rtl,
+            // While zoomed in, lock paging so horizontal drags pan the page instead.
+            userScrollEnabled = scale <= 1.01f,
             modifier = Modifier.fillMaxSize(),
         ) { page ->
-            if (offline) {
-                FileImage(
-                    container = container,
-                    file = container.downloadStore.pageFile(chapterId, page),
-                    contentDescription = "Page ${page + 1}",
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit,
-                )
-            } else {
-                NetworkImage(
-                    container = container,
-                    path = "api/chapters/$chapterId/pages/$page",
-                    contentDescription = "Page ${page + 1}",
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Fit,
-                )
+            ZoomableImage(
+                scale = scale,
+                offset = offset,
+                onChange = { s, o -> scale = s; offset = o },
+            ) {
+                if (offline) {
+                    FileImage(
+                        container = container,
+                        file = container.downloadStore.pageFile(chapterId, page),
+                        contentDescription = "Page ${page + 1}",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit,
+                    )
+                } else {
+                    NetworkImage(
+                        container = container,
+                        path = "api/chapters/$chapterId/pages/$page",
+                        contentDescription = "Page ${page + 1}",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Fit,
+                    )
+                }
             }
         }
 
@@ -154,6 +178,59 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
                 }
             }
         }
+    }
+}
+
+/**
+ * Wraps a page image with pinch-to-zoom, drag-to-pan, and double-tap-to-toggle-zoom.
+ * Zoom/pan state is hoisted so the pager can disable swiping while the page is zoomed.
+ */
+@Composable
+private fun ZoomableImage(
+    scale: Float,
+    offset: Offset,
+    onChange: (Float, Offset) -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val curScale by rememberUpdatedState(scale)
+    val curOffset by rememberUpdatedState(offset)
+    BoxWithConstraints(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        val maxW = constraints.maxWidth.toFloat()
+        val maxH = constraints.maxHeight.toFloat()
+        Box(
+            Modifier
+                .fillMaxSize()
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = offset.x
+                    translationY = offset.y
+                }
+                .pointerInput(Unit) {
+                    detectTransformGestures { _, pan, zoom, _ ->
+                        val newScale = (curScale * zoom).coerceIn(1f, 5f)
+                        val newOffset = if (newScale <= 1f) {
+                            Offset.Zero
+                        } else {
+                            val maxX = maxW * (newScale - 1f) / 2f
+                            val maxY = maxH * (newScale - 1f) / 2f
+                            Offset(
+                                (curOffset.x + pan.x).coerceIn(-maxX, maxX),
+                                (curOffset.y + pan.y).coerceIn(-maxY, maxY),
+                            )
+                        }
+                        onChange(newScale, newOffset)
+                    }
+                }
+                .pointerInput(Unit) {
+                    detectTapGestures(
+                        onDoubleTap = {
+                            if (curScale > 1f) onChange(1f, Offset.Zero) else onChange(2.5f, Offset.Zero)
+                        },
+                    )
+                },
+            contentAlignment = Alignment.Center,
+        ) { content() }
     }
 }
 

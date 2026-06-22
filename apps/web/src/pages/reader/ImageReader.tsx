@@ -11,6 +11,11 @@ const MODE_KEY = "mangrove.reader.mode";
 const FIT_KEY = "mangrove.reader.fit";
 const DIR_PREF = "reader.dir";
 
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 5;
+const ZOOM_STEP = 0.25;
+const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100));
+
 function useReaderPrefs() {
   const [mode, setMode] = useState<Mode>(() => (localStorage.getItem(MODE_KEY) as Mode) || "single");
   const [fit, setFit] = useState<Fit>(() => (localStorage.getItem(FIT_KEY) as Fit) || "contain");
@@ -24,19 +29,6 @@ function useReaderPrefs() {
   const setDir = (d: Dir) => setPref(DIR_PREF, d);
 
   return { mode, setMode, fit, setFit, dir, setDir };
-}
-
-function fitClass(fit: Fit): string {
-  switch (fit) {
-    case "width":
-      return "w-full h-auto";
-    case "height":
-      return "h-screen w-auto";
-    case "original":
-      return "max-w-none";
-    default:
-      return "max-h-screen max-w-full object-contain";
-  }
 }
 
 /** Loads + caches page object URLs for a chapter; revokes on unmount. */
@@ -74,6 +66,7 @@ export default function ImageReader({
 }) {
   const { mode, setMode, fit, setFit, dir, setDir } = useReaderPrefs();
   const [showSettings, setShowSettings] = useState(false);
+  const [zoom, setZoom] = useState(1);
   // "auto" follows the series' own direction; an explicit ltr/rtl overrides it everywhere.
   const rtl = dir === "auto" ? manifest.readingDirection === "rtl" : dir === "rtl";
   const id = manifest.id;
@@ -92,10 +85,12 @@ export default function ImageReader({
         setDir={setDir}
         showSettings={showSettings}
         setShowSettings={setShowSettings}
+        zoom={zoom}
+        setZoom={setZoom}
         onExit={onExit}
         label="Webtoon"
       >
-        <Webtoon id={id} count={count} startPage={startPage} loadPage={loadPage} fit={fit} />
+        <Webtoon id={id} count={count} startPage={startPage} loadPage={loadPage} fit={fit} zoom={zoom} />
       </ReaderChrome>
     );
   }
@@ -111,10 +106,146 @@ export default function ImageReader({
       setDir={setDir}
       showSettings={showSettings}
       setShowSettings={setShowSettings}
+      zoom={zoom}
+      setZoom={setZoom}
       rtl={rtl}
       startPage={startPage}
       loadPage={loadPage}
       onExit={onExit}
+    />
+  );
+}
+
+/** A scroll container that fits a page at zoom 1 and lets you pan when zoomed in. */
+function ZoomViewport({
+  containerRef,
+  zoom,
+  setZoom,
+  onTap,
+  children,
+}: {
+  containerRef: React.RefObject<HTMLDivElement>;
+  zoom: number;
+  setZoom: (z: number) => void;
+  onTap?: (e: React.MouseEvent) => void;
+  children: React.ReactNode;
+}) {
+  const drag = useRef<{ x: number; y: number; sl: number; st: number; moved: boolean } | null>(null);
+
+  const onWheel = (e: React.WheelEvent) => {
+    if (!(e.ctrlKey || e.metaKey)) return; // plain wheel scrolls/pans
+    e.preventDefault();
+    setZoom(clampZoom(zoom + (e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP)));
+  };
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (zoom <= 1 || e.button !== 0) return;
+    const el = containerRef.current;
+    if (!el) return;
+    drag.current = { x: e.clientX, y: e.clientY, sl: el.scrollLeft, st: el.scrollTop, moved: false };
+    el.setPointerCapture(e.pointerId);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = drag.current;
+    const el = containerRef.current;
+    if (!d || !el) return;
+    const dx = e.clientX - d.x;
+    const dy = e.clientY - d.y;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) d.moved = true;
+    el.scrollLeft = d.sl - dx;
+    el.scrollTop = d.st - dy;
+  };
+  const onPointerUp = (e: React.PointerEvent) => {
+    drag.current = null;
+    containerRef.current?.releasePointerCapture?.(e.pointerId);
+  };
+
+  const handleClick = (e: React.MouseEvent) => {
+    if (drag.current?.moved) return; // finished a pan, not a tap
+    if (e.detail > 1) return; // part of a double-click (zoom toggle)
+    if (zoom > 1) return; // taps don't turn pages while zoomed in
+    onTap?.(e);
+  };
+  const handleDoubleClick = () => setZoom(zoom > 1 ? 1 : 2.5);
+
+  return (
+    <div
+      ref={containerRef}
+      className={`relative h-full w-full overflow-auto ${zoom > 1 ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"}`}
+      onWheel={onWheel}
+      onClick={handleClick}
+      onDoubleClick={handleDoubleClick}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+    >
+      <div className="flex min-h-full min-w-full">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * Renders a page at an explicit pixel size = (fit-to-viewport scale) × zoom.
+ * Using a real size (not just max-* caps) means zoom genuinely enlarges the page
+ * and the scroll container grows so every part stays reachable.
+ */
+function ZoomImage({
+  src,
+  alt,
+  fit,
+  zoom,
+  frac,
+  containerRef,
+}: {
+  src: string;
+  alt: string;
+  fit: Fit;
+  zoom: number;
+  frac: number; // share of viewport width this page may use (1 single, 0.5 double)
+  containerRef: React.RefObject<HTMLElement>;
+}) {
+  const [nat, setNat] = useState<{ w: number; h: number } | null>(null);
+  const [box, setBox] = useState<{ w: number; h: number } | null>(null);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const update = () => setBox({ w: el.clientWidth, h: el.clientHeight });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [containerRef]);
+
+  const style = useMemo<React.CSSProperties>(() => {
+    if (!nat || !box || nat.w === 0 || nat.h === 0) return { maxWidth: "100%", maxHeight: "100%" };
+    const availW = box.w * frac;
+    let base: number; // scale that makes the page "fit" at zoom 1
+    switch (fit) {
+      case "width":
+        base = availW / nat.w;
+        break;
+      case "height":
+        base = box.h / nat.h;
+        break;
+      case "original":
+        base = 1;
+        break;
+      default:
+        base = Math.min(availW / nat.w, box.h / nat.h);
+    }
+    const s = base * zoom;
+    return { width: `${Math.round(nat.w * s)}px`, height: `${Math.round(nat.h * s)}px` };
+  }, [nat, box, fit, zoom, frac]);
+
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className="m-auto block select-none"
+      style={style}
+      draggable={false}
+      onLoad={(e) => setNat({ w: e.currentTarget.naturalWidth, h: e.currentTarget.naturalHeight })}
     />
   );
 }
@@ -141,15 +272,18 @@ function Paged(props: {
   setDir: (d: Dir) => void;
   showSettings: boolean;
   setShowSettings: (b: boolean) => void;
+  zoom: number;
+  setZoom: (z: number) => void;
   rtl: boolean;
   startPage: number;
   loadPage: (n: number) => Promise<string | null>;
   onExit: () => void;
 }) {
-  const { manifest, mode, rtl, startPage, loadPage, onExit } = props;
+  const { manifest, mode, zoom, setZoom, rtl, startPage, loadPage, onExit } = props;
   const count = manifest.pageCount;
   const double = mode === "double";
   const spreads = useMemo(() => buildSpreads(count, double), [count, double]);
+  const viewportRef = useRef<HTMLDivElement>(null);
 
   const [spreadIdx, setSpreadIdx] = useState(() => {
     const found = spreads.findIndex((s) => s.includes(startPage));
@@ -189,10 +323,13 @@ function Paged(props: {
       if (e.key === "ArrowRight") rtl ? goPrev() : goNext();
       else if (e.key === "ArrowLeft") rtl ? goNext() : goPrev();
       else if (e.key === "Escape") onExit();
+      else if (e.key === "+" || e.key === "=") setZoom(clampZoom(zoom + ZOOM_STEP));
+      else if (e.key === "-" || e.key === "_") setZoom(clampZoom(zoom - ZOOM_STEP));
+      else if (e.key === "0") setZoom(1);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rtl, goNext, goPrev, onExit]);
+  }, [rtl, goNext, goPrev, onExit, zoom, setZoom]);
 
   const onClickViewport = (e: React.MouseEvent) => {
     const x = e.clientX - e.currentTarget.getBoundingClientRect().left;
@@ -215,6 +352,8 @@ function Paged(props: {
       setDir={props.setDir}
       showSettings={props.showSettings}
       setShowSettings={props.setShowSettings}
+      zoom={zoom}
+      setZoom={setZoom}
       onExit={onExit}
       label={`Page ${current[0] + 1}${current.length > 1 ? `–${current[1] + 1}` : ""} / ${count} · ${
         rtl ? "RTL" : "LTR"
@@ -247,26 +386,28 @@ function Paged(props: {
         </div>
       }
     >
-      <div
-        className="flex h-full flex-1 cursor-pointer items-center justify-center gap-1 overflow-auto"
-        onClick={onClickViewport}
-      >
+      <ZoomViewport containerRef={viewportRef} zoom={zoom} setZoom={setZoom} onTap={onClickViewport}>
         {loading ? (
-          <Spinner />
+          <div className="m-auto">
+            <Spinner />
+          </div>
         ) : (
-          ordered.map((p, i) =>
-            urls[double && rtl ? current.length - 1 - i : i] ? (
-              <img
+          ordered.map((p, i) => {
+            const url = urls[double && rtl ? current.length - 1 - i : i];
+            return url ? (
+              <ZoomImage
                 key={p}
-                src={urls[double && rtl ? current.length - 1 - i : i] ?? undefined}
+                src={url}
                 alt={`Page ${p + 1}`}
-                className={`${fitClass(props.fit)} select-none`}
-                draggable={false}
+                fit={props.fit}
+                zoom={zoom}
+                frac={1 / ordered.length}
+                containerRef={viewportRef}
               />
-            ) : null
-          )
+            ) : null;
+          })
         )}
-      </div>
+      </ZoomViewport>
     </ReaderChrome>
   );
 }
@@ -279,12 +420,14 @@ function Webtoon({
   startPage,
   loadPage,
   fit,
+  zoom,
 }: {
   id: number;
   count: number;
   startPage: number;
   loadPage: (n: number) => Promise<string | null>;
   fit: Fit;
+  zoom: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [loaded, setLoaded] = useState<Map<number, string>>(new Map());
@@ -329,10 +472,12 @@ function Webtoon({
     };
   }, [id]);
 
-  const widthClass = fit === "original" ? "max-w-none" : "mx-auto w-full max-w-3xl";
+  // Webtoon zoom widens the strip; the column stays centered and scrolls vertically.
+  const imgStyle =
+    fit === "original" ? { maxWidth: "none" } : { width: "100%", maxWidth: `${48 * zoom}rem` };
 
   return (
-    <div ref={containerRef} className="h-full overflow-y-auto bg-black">
+    <div ref={containerRef} className="h-full overflow-auto bg-black">
       {Array.from({ length: count }, (_, n) => (
         <div
           key={n}
@@ -344,7 +489,13 @@ function Webtoon({
           style={n === startPage ? { scrollMarginTop: 0 } : undefined}
         >
           {loaded.get(n) ? (
-            <img src={loaded.get(n)} alt={`Page ${n + 1}`} className={widthClass} draggable={false} />
+            <img
+              src={loaded.get(n)}
+              alt={`Page ${n + 1}`}
+              className="mx-auto"
+              style={imgStyle}
+              draggable={false}
+            />
           ) : (
             <Spinner label={`Page ${n + 1}`} />
           )}
@@ -366,6 +517,8 @@ function ReaderChrome({
   setDir,
   showSettings,
   setShowSettings,
+  zoom,
+  setZoom,
   onExit,
   label,
   footer,
@@ -380,6 +533,8 @@ function ReaderChrome({
   setDir: (d: Dir) => void;
   showSettings: boolean;
   setShowSettings: (b: boolean) => void;
+  zoom: number;
+  setZoom: (z: number) => void;
   onExit: () => void;
   label: string;
   footer?: React.ReactNode;
@@ -437,6 +592,31 @@ function ReaderChrome({
       )}
 
       <div className="flex flex-1 overflow-hidden">{children}</div>
+
+      {/* Floating zoom controls (work in every layout). */}
+      <div className="absolute bottom-20 right-4 z-10 flex flex-col items-stretch overflow-hidden rounded-xl border border-neutral-700 bg-neutral-900/90 text-neutral-200 shadow-xl">
+        <button
+          onClick={() => setZoom(clampZoom(zoom + ZOOM_STEP))}
+          className="px-3 py-2 text-lg leading-none hover:bg-neutral-800"
+          aria-label="Zoom in"
+        >
+          +
+        </button>
+        <button
+          onClick={() => setZoom(1)}
+          className="border-y border-neutral-700 px-3 py-1.5 text-[11px] hover:bg-neutral-800"
+          aria-label="Reset zoom"
+        >
+          {Math.round(zoom * 100)}%
+        </button>
+        <button
+          onClick={() => setZoom(clampZoom(zoom - ZOOM_STEP))}
+          className="px-3 py-2 text-lg leading-none hover:bg-neutral-800"
+          aria-label="Zoom out"
+        >
+          −
+        </button>
+      </div>
 
       {footer && (
         <footer className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/80 to-transparent px-4 py-3">
