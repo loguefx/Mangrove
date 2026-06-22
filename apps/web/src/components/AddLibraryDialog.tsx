@@ -13,7 +13,7 @@ export function AddLibraryDialog({
   const [name, setName] = useState("");
   const [type, setType] = useState(0);
   const [storageKind, setStorageKind] = useState(0); // 0 = Local, 1 = SMB
-  const [rootPath, setRootPath] = useState("");
+  const [paths, setPaths] = useState<string[]>([""]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [domain, setDomain] = useState("");
@@ -23,19 +23,39 @@ export function AddLibraryDialog({
   const [error, setError] = useState<string | null>(null);
 
   const isSmb = storageKind === 1;
+  const cleanPaths = paths.map((p) => p.trim()).filter(Boolean);
+
+  const setPath = (i: number, value: string) =>
+    setPaths((prev) => prev.map((p, idx) => (idx === i ? value : p)));
+  const addPath = () => setPaths((prev) => [...prev, ""]);
+  const removePath = (i: number) =>
+    setPaths((prev) => (prev.length === 1 ? prev : prev.filter((_, idx) => idx !== i)));
 
   const test = async () => {
     setBusy(true);
     setTestResult(null);
     try {
-      const r = await api.testStorage({
-        storageKind,
-        rootPath,
-        username: isSmb ? username : undefined,
-        password: isSmb ? password : undefined,
-        domain: isSmb ? domain : undefined,
+      // Test every folder so the admin knows each one is reachable before creating the library.
+      for (const p of cleanPaths) {
+        const r = await api.testStorage({
+          storageKind,
+          rootPath: p,
+          username: isSmb ? username : undefined,
+          password: isSmb ? password : undefined,
+          domain: isSmb ? domain : undefined,
+        });
+        if (!r.success) {
+          setTestResult({ ok: false, message: `${p}: ${r.message}` });
+          return;
+        }
+      }
+      setTestResult({
+        ok: true,
+        message:
+          cleanPaths.length > 1
+            ? `All ${cleanPaths.length} folders are reachable.`
+            : "Folder is reachable.",
       });
-      setTestResult({ ok: r.success, message: r.message });
     } catch (err) {
       setTestResult({ ok: false, message: err instanceof Error ? err.message : "Test failed" });
     } finally {
@@ -62,7 +82,7 @@ export function AddLibraryDialog({
         name,
         type,
         storageKind,
-        rootPath,
+        paths: cleanPaths,
         credentialId,
         folderWatch: false,
       });
@@ -117,17 +137,39 @@ export function AddLibraryDialog({
             ))}
           </div>
 
-          <label className="block">
-            <span className="mb-1 block text-sm text-neutral-400">
-              {isSmb ? "Path (\\\\server\\share\\folder or smb://…)" : "Folder path"}
+          <div className="space-y-2">
+            <span className="block text-sm text-neutral-400">
+              {isSmb ? "Folders (\\\\server\\share\\folder or smb://…)" : "Folders"}
             </span>
-            <input
-              className="input"
-              value={rootPath}
-              onChange={(e) => setRootPath(e.target.value)}
-              placeholder={isSmb ? "\\\\NAS\\Manga" : "C:\\Manga"}
-            />
-          </label>
+            {paths.map((p, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <input
+                  className="input flex-1"
+                  value={p}
+                  onChange={(e) => setPath(i, e.target.value)}
+                  placeholder={isSmb ? "\\\\NAS\\Manga" : "C:\\Manga"}
+                />
+                <button
+                  onClick={() => removePath(i)}
+                  disabled={paths.length === 1}
+                  title="Remove folder"
+                  className="rounded-lg bg-neutral-800 px-3 py-2 text-sm text-neutral-300 hover:bg-neutral-700 disabled:opacity-30"
+                >
+                  −
+                </button>
+              </div>
+            ))}
+            <button
+              onClick={addPath}
+              className="text-sm text-teal-mint hover:underline"
+            >
+              + Add another folder
+            </button>
+            <p className="text-xs text-neutral-500">
+              Add several folders when a library spans more than one location (e.g. a NAS share that ran
+              out of space). A series can continue across folders.
+            </p>
+          </div>
 
           {isSmb && (
             <div className="grid grid-cols-3 gap-3">
@@ -170,7 +212,7 @@ export function AddLibraryDialog({
         <div className="mt-6 flex items-center justify-between">
           <button
             onClick={test}
-            disabled={busy || !rootPath}
+            disabled={busy || cleanPaths.length === 0}
             className="rounded-xl bg-neutral-800 px-4 py-2 text-sm text-neutral-200 hover:bg-neutral-700 disabled:opacity-50"
           >
             Test connection
@@ -184,7 +226,7 @@ export function AddLibraryDialog({
             </button>
             <button
               onClick={create}
-              disabled={busy || !name || !rootPath}
+              disabled={busy || !name || cleanPaths.length === 0}
               className="rounded-xl bg-teal px-4 py-2 text-sm font-medium text-white hover:bg-teal/90 disabled:opacity-50"
             >
               Create

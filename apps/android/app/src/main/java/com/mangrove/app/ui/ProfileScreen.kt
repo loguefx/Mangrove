@@ -1,6 +1,7 @@
 package com.mangrove.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -119,6 +120,26 @@ fun ProfileScreen(container: AppContainer, nav: NavController) {
                         container.prefs.wifiOnly = it
                         container.downloadManager.rescheduleForConstraintChange()
                     },
+                )
+            }
+        }
+
+        if (container.isAdmin) {
+            SectionTitle("Administration")
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .clickable { nav.navigate("admin") }
+                    .padding(16.dp),
+            ) {
+                Text("Admin settings")
+                Text(
+                    "Auto-scan interval, libraries & folders, and users",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }

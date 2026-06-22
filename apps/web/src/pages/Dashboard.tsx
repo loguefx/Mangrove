@@ -55,6 +55,28 @@ export default function Dashboard() {
     viewRef.current = view;
   }, [view]);
 
+  const searchRef = useRef(search);
+  useEffect(() => {
+    searchRef.current = search;
+  }, [search]);
+
+  // Auto-refresh: periodically pull fresh content so newly-scanned chapters/series appear without a
+  // manual refresh. Pauses while the tab is hidden or a manual scan is already polling.
+  useEffect(() => {
+    const REFRESH_MS = 45000;
+    const id = setInterval(() => {
+      if (document.hidden || scanning) return;
+      loadLibraries();
+      loadHome();
+      const v = viewRef.current;
+      if (typeof v === "number") {
+        api.series(v, searchRef.current || undefined).then(setSeries).catch(() => {});
+      }
+    }, REFRESH_MS);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scanning]);
+
   // Persist the window scroll position per-library so we can restore it on return.
   const scrollKey = (lib: number) => `mg-scroll-lib-${lib}`;
   const pendingRestore = useRef<number | null>(null);
@@ -351,6 +373,9 @@ function HomeView({
       catchUp.length === 0 &&
       wantToRead.length === 0);
 
+  // Map favorited series -> its unread-new-chapter info, so we can badge covers in the Favorites rail.
+  const newBySeries = new Map(catchUp.map((c) => [c.seriesId, c]));
+
   return (
     <div>
       {/* Catch up — new chapters in favorited series */}
@@ -416,14 +441,26 @@ function HomeView({
 
       {wantToRead.length > 0 && (
         <Rail title="Favorites">
-          {wantToRead.map((s) => (
-            <CoverCard
-              key={s.id}
-              to={`/series/${s.id}`}
-              title={s.name}
-              src={s.hasCover ? `/api/series/${s.id}/cover` : null}
-            />
-          ))}
+          {wantToRead.map((s) => {
+            const unread = newBySeries.get(s.id);
+            return (
+              <div key={s.id} className="relative w-32 shrink-0">
+                {unread && (
+                  <span
+                    className="absolute right-1.5 top-1.5 z-10 rounded-full bg-rose-500 px-2 py-0.5 text-xs font-semibold text-white shadow"
+                    title={`${unread.newChapters} new chapter${unread.newChapters > 1 ? "s" : ""} to read`}
+                  >
+                    {unread.newChapters} new
+                  </span>
+                )}
+                <CoverCard
+                  to={`/series/${s.id}`}
+                  title={s.name}
+                  src={s.hasCover ? `/api/series/${s.id}/cover` : null}
+                />
+              </div>
+            );
+          })}
         </Rail>
       )}
 

@@ -34,6 +34,17 @@ export default function SeriesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  // Auto-refresh so newly-scanned chapters appear while the page is open. Skipped while editing
+  // metadata or when the tab is hidden.
+  useEffect(() => {
+    if (!id || editing) return;
+    const iv = setInterval(() => {
+      if (document.hidden) return;
+      api.seriesDetail(Number(id)).then(setSeries).catch(() => {});
+    }, 45000);
+    return () => clearInterval(iv);
+  }, [id, editing]);
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">

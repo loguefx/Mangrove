@@ -3,6 +3,7 @@ using System;
 using Mangrove.Server.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Mangrove.Server.Data.Migrations
 {
     [DbContext(typeof(MangroveDbContext))]
-    partial class MangroveDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260622191718_LibraryPaths")]
+    partial class LibraryPaths
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "8.0.11");

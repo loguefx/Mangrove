@@ -59,6 +59,9 @@ fun LibrariesScreen(container: AppContainer, nav: NavController) {
     LifecycleResumeRefresh {
         if (firstLoadDone) scope.launch { refreshing = true; fetch(); refreshing = false }
     }
+    AutoRefresh {
+        if (firstLoadDone) scope.launch { fetch() }
+    }
 
     Column(
         Modifier

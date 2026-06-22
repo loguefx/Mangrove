@@ -13,6 +13,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -25,7 +26,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.repeatOnLifecycle
 import coil.compose.AsyncImage
+import kotlinx.coroutines.delay
 import coil.request.ImageRequest
 import com.mangrove.app.data.AppContainer
 
@@ -167,5 +170,24 @@ fun LifecycleResumeRefresh(onResume: () -> Unit) {
         }
         owner.lifecycle.addObserver(observer)
         onDispose { owner.lifecycle.removeObserver(observer) }
+    }
+}
+
+/**
+ * Periodically invokes [onTick] while this screen is resumed (foreground + visible), so newly-scanned
+ * chapters/series show up automatically without the user pulling to refresh. Ticking pauses when the
+ * screen is backgrounded and resumes when it returns.
+ */
+@Composable
+fun AutoRefresh(intervalMs: Long = 45_000L, onTick: () -> Unit) {
+    val current = rememberUpdatedState(onTick)
+    val owner = LocalLifecycleOwner.current
+    LaunchedEffect(owner) {
+        owner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                delay(intervalMs)
+                current.value()
+            }
+        }
     }
 }

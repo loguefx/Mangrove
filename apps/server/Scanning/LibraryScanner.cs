@@ -50,27 +50,53 @@ public sealed class LibraryScanner
 
     private sealed record ContentUnit(
         string Path, string Name, bool IsFolder, long Size, DateTime LastModified,
-        int ImageCount, string Format, string[] Segments);
+        int ImageCount, string Format, string[] Segments, string Root, IStorageProvider Provider);
 
     /// <summary>Runs a scan and records a <see cref="JobLog"/> entry for the tasks/history view.</summary>
-    public async Task<ScanResult> ScanAsync(int libraryId, CancellationToken ct = default)
+    public Task<ScanResult> ScanAsync(int libraryId, CancellationToken ct = default) =>
+        ScanAsync(libraryId, recordHistory: true, ct);
+
+    /// <summary>
+    /// Runs a scan. When <paramref name="recordHistory"/> is false (automatic/periodic scans), a
+    /// <see cref="JobLog"/> is written only if the scan changed something or failed — so routine
+    /// no-op background scans don't flood the task history.
+    /// </summary>
+    public async Task<ScanResult> ScanAsync(int libraryId, bool recordHistory, CancellationToken ct = default)
     {
         var libName = await _db.Libraries.Where(l => l.Id == libraryId).Select(l => l.Name).FirstOrDefaultAsync(ct);
-        var job = new JobLog { Kind = "scan", Target = libName ?? $"library:{libraryId}", Status = "Running" };
-        _db.JobLogs.Add(job);
-        await _db.SaveChangesAsync(ct);
+        var target = libName ?? $"library:{libraryId}";
+
+        JobLog? job = null;
+        if (recordHistory)
+        {
+            job = new JobLog { Kind = "scan", Target = target, Status = "Running" };
+            _db.JobLogs.Add(job);
+            await _db.SaveChangesAsync(ct);
+        }
 
         try
         {
             var result = await ScanCoreAsync(libraryId, ct);
-            job.Status = "Completed";
-            job.Message = $"{result.ChaptersAdded} added, {result.ChaptersUpdated} updated, {result.ChaptersRemoved} removed";
-            job.FinishedAt = DateTime.UtcNow;
-            await _db.SaveChangesAsync(ct);
+
+            // For quiet (automatic) scans, only leave a history entry when something actually changed.
+            if (job is null && result.ChaptersAdded + result.ChaptersUpdated + result.ChaptersRemoved > 0)
+            {
+                job = new JobLog { Kind = "scan", Target = target };
+                _db.JobLogs.Add(job);
+            }
+
+            if (job is not null)
+            {
+                job.Status = "Completed";
+                job.Message = $"{result.ChaptersAdded} added, {result.ChaptersUpdated} updated, {result.ChaptersRemoved} removed";
+                job.FinishedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync(ct);
+            }
             return result;
         }
         catch (Exception ex)
         {
+            job ??= AddFailureJob(target);
             job.Status = "Failed";
             job.Message = ex.Message;
             job.FinishedAt = DateTime.UtcNow;
@@ -79,17 +105,38 @@ public sealed class LibraryScanner
         }
     }
 
+    private JobLog AddFailureJob(string target)
+    {
+        var job = new JobLog { Kind = "scan", Target = target };
+        _db.JobLogs.Add(job);
+        return job;
+    }
+
     private async Task<ScanResult> ScanCoreAsync(int libraryId, CancellationToken ct = default)
     {
         var library = await _db.Libraries
             .Include(l => l.Credential)
+            .Include(l => l.Paths).ThenInclude(p => p.Credential)
             .FirstOrDefaultAsync(l => l.Id == libraryId, ct)
             ?? throw new InvalidOperationException($"Library {libraryId} not found.");
 
-        var provider = _providers.ForLibrary(library, library.Credential);
+        // A library can span several storage folders, each optionally using its own credential
+        // (falling back to the library credential). Older libraries with no LibraryPath rows fall
+        // back to the legacy single RootPath.
+        var roots = library.Paths.Count > 0
+            ? library.Paths
+                .Where(p => !string.IsNullOrWhiteSpace(p.Path))
+                .Select(p => (Path: p.Path, Provider: _providers.ForLibrary(library, p.Credential ?? library.Credential)))
+                .ToList()
+            : new List<(string Path, IStorageProvider Provider)>
+                { (library.RootPath, _providers.ForLibrary(library, library.Credential)) };
 
         var units = new List<ContentUnit>();
-        await CollectUnitsAsync(provider, library.RootPath, library.RootPath, 0, units, ct);
+        foreach (var (root, prov) in roots)
+        {
+            if (string.IsNullOrWhiteSpace(root)) continue;
+            await CollectUnitsAsync(prov, root, root, 0, units, ct);
+        }
 
         var added = 0;
         var updated = 0;
@@ -118,8 +165,8 @@ public sealed class LibraryScanner
             // BEFORE caching any chapter page — so a real cover always wins over an extracted page, and
             // covers land immediately rather than only after the whole (slow, interruptible) scan. The
             // end-of-scan pass below is kept as a safety net (e.g. art added after the initial scan).
-            if (folderCoverTried.Add(series.Id) && TryGetSeriesDir(library, unit, out var seriesDir))
-                await TryApplyFolderCoverAsync(series, seriesDir, provider, ct);
+            if (folderCoverTried.Add(series.Id) && TryGetSeriesDir(unit, out var seriesDir))
+                await TryApplyFolderCoverAsync(series, seriesDir, unit.Provider, ct);
             var volume = await GetOrCreateVolumeAsync(series, parsed.Volume ?? 0, ct);
             var chapter = await GetOrCreateChapterAsync(volume, parsed, unit, ct);
 
@@ -127,7 +174,7 @@ public sealed class LibraryScanner
 
             try
             {
-                chapter.PageCount = await _readers.CountPagesAsync(unit.Format, unit.Path, provider, ct);
+                chapter.PageCount = await _readers.CountPagesAsync(unit.Format, unit.Path, unit.Provider, ct);
             }
             catch (Exception ex)
             {
@@ -137,8 +184,8 @@ public sealed class LibraryScanner
 
             await _db.SaveChangesAsync(ct); // ensure chapter.Id for cover filenames
 
-            await CacheCoverAsync(series, chapter, unit, provider, ct);
-            await ApplyMetadataAsync(series, chapter, unit, provider, ct);
+            await CacheCoverAsync(series, chapter, unit, unit.Provider, ct);
+            await ApplyMetadataAsync(series, chapter, unit, unit.Provider, ct);
 
             if (existing is null)
             {
@@ -169,7 +216,7 @@ public sealed class LibraryScanner
         // Apply series-level sidecar assets sitting next to the chapters: a cover image
         // (folder.jpg/cover.jpg/poster.jpg) and a ComicInfo.xml metadata file. This is the common
         // manga layout (and matches Jellyfin/Kavita conventions).
-        await ApplyFolderAssetsAsync(library, provider, units, ct);
+        await ApplyFolderAssetsAsync(library, units, ct);
 
         var removed = await RemoveMissingAsync(library.Id, seenPaths, ct);
 
@@ -217,7 +264,9 @@ public sealed class LibraryScanner
                 LastModified: pageImages.Max(f => f.LastModified),
                 ImageCount: pageImages.Count,
                 Format: FormatRegistry.ImageFolderFormat,
-                Segments: RelativeSegments(root, path)));
+                Segments: RelativeSegments(root, path),
+                Root: root,
+                Provider: provider));
         }
 
         foreach (var file in entries.Where(e => !e.IsDirectory && SupportedFormats.IsSupportedFile(e.Name)))
@@ -230,7 +279,9 @@ public sealed class LibraryScanner
                 LastModified: file.LastModified,
                 ImageCount: 0,
                 Format: SupportedFormats.NormalizedExtension(file.Name).TrimStart('.'),
-                Segments: RelativeSegments(root, file.FullPath)));
+                Segments: RelativeSegments(root, file.FullPath),
+                Root: root,
+                Provider: provider));
         }
 
         foreach (var dir in entries.Where(e => e.IsDirectory))
@@ -309,17 +360,19 @@ public sealed class LibraryScanner
     /// (including incremental) so existing libraries pick up art and metadata added after the first scan.
     /// </summary>
     private async Task ApplyFolderAssetsAsync(
-        Library library, IStorageProvider provider, List<ContentUnit> units, CancellationToken ct)
+        Library library, List<ContentUnit> units, CancellationToken ct)
     {
-        var seriesDirs = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Map series name -> the folder that holds its assets, plus the provider that can read it.
+        // First occurrence wins (a series can appear under several paths).
+        var seriesDirs = new Dictionary<string, (string Dir, IStorageProvider Provider)>(StringComparer.OrdinalIgnoreCase);
         foreach (var unit in units)
         {
-            if (!TryGetSeriesDir(library, unit, out var dir)) continue;
+            if (!TryGetSeriesDir(unit, out var dir)) continue;
             var (seriesName, _) = ResolveSeries(unit);
-            seriesDirs.TryAdd(seriesName, dir);
+            seriesDirs.TryAdd(seriesName, (dir, unit.Provider));
         }
 
-        foreach (var (seriesName, dir) in seriesDirs)
+        foreach (var (seriesName, target) in seriesDirs)
         {
             ct.ThrowIfCancellationRequested();
             var series = await _db.Series
@@ -329,30 +382,30 @@ public sealed class LibraryScanner
             IReadOnlyList<StorageEntry> entries;
             try
             {
-                entries = await provider.ListAsync(dir, ct);
+                entries = await target.Provider.ListAsync(target.Dir, ct);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to list series folder '{Dir}' for assets", dir);
+                _logger.LogWarning(ex, "Failed to list series folder '{Dir}' for assets", target.Dir);
                 continue;
             }
 
-            await TryApplyFolderCoverAsync(series, entries, provider, ct);
-            await TryApplySidecarMetadataAsync(series, entries, provider, ct);
+            await TryApplyFolderCoverAsync(series, entries, target.Provider, ct);
+            await TryApplySidecarMetadataAsync(series, entries, target.Provider, ct);
         }
     }
 
     /// <summary>
-    /// Resolves the on-disk series folder for a unit (the top-level folder under the library root), or
+    /// Resolves the on-disk series folder for a unit (the top-level folder under its storage root), or
     /// false when the unit isn't inside a series folder (a loose file directly in the root).
     /// </summary>
-    private static bool TryGetSeriesDir(Library library, ContentUnit unit, out string dir)
+    private static bool TryGetSeriesDir(ContentUnit unit, out string dir)
     {
         dir = string.Empty;
         if (unit.Segments.Length == 0) return false;
         // Needs a containing series folder: folder-units always have one; file-units need >= 2 segments.
         if (!unit.IsFolder && unit.Segments.Length < 2) return false;
-        dir = JoinPath(library.RootPath, unit.Segments[0]);
+        dir = JoinPath(unit.Root, unit.Segments[0]);
         return true;
     }
 

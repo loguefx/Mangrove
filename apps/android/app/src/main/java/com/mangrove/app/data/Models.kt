@@ -35,10 +35,24 @@ data class SeriesDto(
 )
 
 @Serializable
+data class LibraryPathDto(
+    val id: Int = 0,
+    val path: String = "",
+    val credentialId: Int? = null,
+)
+
+@Serializable
 data class LibraryDto(
     val id: Int,
     val name: String,
     val seriesCount: Int = 0,
+    val type: Int = 0,
+    val storageKind: Int = 0,
+    val rootPath: String = "",
+    val credentialId: Int? = null,
+    val folderWatch: Boolean = false,
+    val lastScanAt: String? = null,
+    val paths: List<LibraryPathDto> = emptyList(),
 )
 
 @Serializable
@@ -110,4 +124,118 @@ data class ProgressDto(
     val chapterId: Int = 0,
     val page: Int = 0,
     val isRead: Boolean = false,
+)
+
+// ---- Admin ----
+
+@Serializable
+data class SettingDto(val key: String, val value: String? = null)
+
+@Serializable
+data class AdminUserDto(
+    val id: Int,
+    val username: String,
+    val email: String? = null,
+    val roles: List<String> = emptyList(),
+    val isLocked: Boolean = false,
+    val libraryIds: List<Int> = emptyList(),
+    val maxAgeRating: Int? = null,
+    val includeUnknowns: Boolean = true,
+)
+
+@Serializable
+data class CreateUserRequest(
+    val username: String,
+    val email: String? = null,
+    val password: String,
+    val roles: List<String>? = null,
+    val libraryIds: List<Int>? = null,
+)
+
+@Serializable
+data class UpdateUserRequest(
+    val email: String? = null,
+    val roles: List<String>? = null,
+    val isLocked: Boolean? = null,
+    val libraryIds: List<Int>? = null,
+    val maxAgeRating: Int? = null,
+    val includeUnknowns: Boolean? = null,
+)
+
+@Serializable
+data class ResetPasswordRequest(val password: String)
+
+@Serializable
+data class CreateLibraryRequest(
+    val name: String,
+    val type: Int = 0,
+    val storageKind: Int = 0,
+    val credentialId: Int? = null,
+    val folderWatch: Boolean = false,
+    val paths: List<String> = emptyList(),
+)
+
+@Serializable
+data class UpdateLibraryRequest(
+    val name: String? = null,
+    val folderWatch: Boolean? = null,
+    val credentialId: Int? = null,
+    val paths: List<String>? = null,
+)
+
+@Serializable
+data class ScanStatusDto(
+    val libraryId: Int = 0,
+    val state: String = "idle",
+    val queued: Boolean = false,
+)
+
+@Serializable
+data class CredentialDto(
+    val id: Int,
+    val label: String = "",
+    val username: String = "",
+    val domain: String? = null,
+    val kind: Int = 1,
+)
+
+@Serializable
+data class CreateCredentialRequest(
+    val label: String,
+    val username: String,
+    val password: String,
+    val domain: String? = null,
+    val kind: Int = 1,
+)
+
+@Serializable
+data class StorageTestRequest(
+    val storageKind: Int,
+    val rootPath: String,
+    val username: String? = null,
+    val password: String? = null,
+    val domain: String? = null,
+)
+
+@Serializable
+data class StorageTestResponse(
+    val success: Boolean = false,
+    val message: String = "",
+)
+
+@Serializable
+data class ActivityDto(
+    val userId: Int,
+    val username: String,
+    val seriesId: Int? = null,
+    val seriesName: String? = null,
+    val chapterId: Int = 0,
+    val chapterNumber: Float = 0f,
+    val chapterTitle: String? = null,
+    val page: Int = 0,
+    val pageCount: Int = 0,
+    val isRead: Boolean = false,
+    val caughtUp: Boolean = false,
+    val status: String = "reading",
+    val updatedAt: String = "",
 )

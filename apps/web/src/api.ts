@@ -19,6 +19,12 @@ export interface SetupStatus {
   appName: string;
 }
 
+export interface LibraryPathDto {
+  id: number;
+  path: string;
+  credentialId?: number | null;
+}
+
 export interface LibraryDto {
   id: number;
   name: string;
@@ -29,6 +35,7 @@ export interface LibraryDto {
   folderWatch: boolean;
   lastScanAt?: string | null;
   seriesCount: number;
+  paths: LibraryPathDto[];
 }
 
 export interface SeriesDto {
@@ -184,6 +191,22 @@ export interface TaskLogDto {
   finishedAt?: string | null;
 }
 
+export interface ActivityDto {
+  userId: number;
+  username: string;
+  seriesId?: number | null;
+  seriesName?: string | null;
+  chapterId: number;
+  chapterNumber: number;
+  chapterTitle?: string | null;
+  page: number;
+  pageCount: number;
+  isRead: boolean;
+  caughtUp: boolean;
+  status: string; // "reading" | "finished" | "caught-up"
+  updatedAt: string;
+}
+
 export interface ChapterManifestDto {
   id: number;
   pageCount: number;
@@ -327,10 +350,18 @@ export const api = {
     name: string;
     type: number;
     storageKind: number;
-    rootPath: string;
+    paths: string[];
     credentialId: number | null;
     folderWatch: boolean;
   }) => request<LibraryDto>("/api/libraries", { method: "POST", body: JSON.stringify(body) }),
+
+  updateLibrary: (
+    id: number,
+    body: { name?: string; folderWatch?: boolean; credentialId?: number | null; paths?: string[] }
+  ) => request<LibraryDto>(`/api/libraries/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+
+  deleteLibrary: (id: number) =>
+    request<void>(`/api/libraries/${id}`, { method: "DELETE" }),
 
   scanLibrary: (id: number) =>
     request<{ libraryId: number; state: string; queued: boolean }>(
@@ -477,6 +508,8 @@ export const api = {
   saveSettings: (settings: SettingDto[]) =>
     request<void>("/api/settings", { method: "PUT", body: JSON.stringify(settings) }),
   tasks: () => request<TaskLogDto[]>("/api/tasks"),
+
+  activity: () => request<ActivityDto[]>("/api/stats/activity"),
   scanAll: () =>
     request<{ libraries: number; status: string }>("/api/tasks/scan-all", { method: "POST" }),
 };

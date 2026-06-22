@@ -12,6 +12,7 @@ public class MangroveDbContext : DbContext
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<Credential> Credentials => Set<Credential>();
     public DbSet<Library> Libraries => Set<Library>();
+    public DbSet<LibraryPath> LibraryPaths => Set<LibraryPath>();
     public DbSet<LibraryAccess> LibraryAccess => Set<LibraryAccess>();
     public DbSet<Series> Series => Set<Series>();
     public DbSet<Volume> Volumes => Set<Volume>();
@@ -51,6 +52,13 @@ public class MangroveDbContext : DbContext
         b.Entity<Library>()
             .HasOne(l => l.Credential).WithMany(c => c.Libraries)
             .HasForeignKey(l => l.CredentialId).OnDelete(DeleteBehavior.SetNull);
+
+        b.Entity<LibraryPath>()
+            .HasOne(p => p.Library).WithMany(l => l.Paths)
+            .HasForeignKey(p => p.LibraryId).OnDelete(DeleteBehavior.Cascade);
+        b.Entity<LibraryPath>()
+            .HasOne(p => p.Credential).WithMany()
+            .HasForeignKey(p => p.CredentialId).OnDelete(DeleteBehavior.SetNull);
 
         b.Entity<Series>().HasIndex(s => new { s.LibraryId, s.Name });
         b.Entity<Series>()

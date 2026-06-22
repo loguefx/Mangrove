@@ -122,6 +122,26 @@ class AppContainer(context: Context) {
         runCatching { requireBackend().api.savePreferences(mapOf(key to value)) }
     }
 
+    // ---- Admin ----
+
+    val isAdmin: Boolean get() = user?.roles?.any { it.equals("Admin", ignoreCase = true) } == true
+
+    suspend fun settings() = requireBackend().api.settings()
+    suspend fun saveSettings(items: List<SettingDto>) = requireBackend().api.saveSettings(items)
+    suspend fun activity() = requireBackend().api.activity()
+    suspend fun users() = requireBackend().api.users()
+    suspend fun createUser(body: CreateUserRequest) = requireBackend().api.createUser(body)
+    suspend fun updateUser(id: Int, body: UpdateUserRequest) = requireBackend().api.updateUser(id, body)
+    suspend fun resetPassword(id: Int, password: String) =
+        requireBackend().api.resetPassword(id, ResetPasswordRequest(password))
+    suspend fun deleteUser(id: Int) = requireBackend().api.deleteUser(id)
+    suspend fun createLibrary(body: CreateLibraryRequest) = requireBackend().api.createLibrary(body)
+    suspend fun updateLibrary(id: Int, body: UpdateLibraryRequest) = requireBackend().api.updateLibrary(id, body)
+    suspend fun deleteLibrary(id: Int) = requireBackend().api.deleteLibrary(id)
+    suspend fun scanLibrary(id: Int) = requireBackend().api.scanLibrary(id)
+    suspend fun createCredential(body: CreateCredentialRequest) = requireBackend().api.createCredential(body)
+    suspend fun testStorage(body: StorageTestRequest) = requireBackend().api.testStorage(body)
+
     /** Authenticated binary GET (page images, covers) used by the download manager. */
     suspend fun fetchBytes(path: String): ByteArray? = backend?.getBytes(path)
 

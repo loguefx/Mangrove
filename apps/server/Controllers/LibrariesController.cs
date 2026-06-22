@@ -30,10 +30,14 @@ public sealed class LibrariesController : ControllerBase
         var libIds = await _access.AccessibleLibraryIdsAsync(User.GetUserId() ?? 0, User.IsAdmin(), ct);
         var libs = await _db.Libraries
             .Where(l => libIds.Contains(l.Id))
-            .Select(l => new LibraryDto(l.Id, l.Name, l.Type, l.StorageKind, l.RootPath,
-                l.CredentialId, l.FolderWatch, l.LastScanAt, l.Series.Count))
+            .Include(l => l.Paths)
             .ToListAsync(ct);
-        return Ok(libs);
+        var counts = await _db.Series
+            .Where(s => libIds.Contains(s.LibraryId))
+            .GroupBy(s => s.LibraryId)
+            .Select(g => new { g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.Key, x => x.Count, ct);
+        return Ok(libs.Select(l => ToDto(l, counts.GetValueOrDefault(l.Id))).ToList());
     }
 
     [HttpPost]
@@ -43,19 +47,59 @@ public sealed class LibrariesController : ControllerBase
         if (req.StorageKind == StorageKind.Smb && req.CredentialId is null)
             return BadRequest(new { error = "SMB libraries require a credential." });
 
+        var paths = NormalizePaths(req.Paths, req.RootPath);
+        if (paths.Count == 0)
+            return BadRequest(new { error = "At least one folder path is required." });
+
         var lib = new Library
         {
             Name = req.Name,
             Type = req.Type,
             StorageKind = req.StorageKind,
-            RootPath = req.RootPath,
+            RootPath = paths[0],
             CredentialId = req.CredentialId,
             FolderWatch = req.FolderWatch,
+            Paths = paths.Select(p => new LibraryPath { Path = p }).ToList(),
         };
         _db.Libraries.Add(lib);
         await _db.SaveChangesAsync(ct);
-        return Ok(new LibraryDto(lib.Id, lib.Name, lib.Type, lib.StorageKind, lib.RootPath,
-            lib.CredentialId, lib.FolderWatch, lib.LastScanAt, 0));
+        return Ok(ToDto(lib, 0));
+    }
+
+    [HttpPut("{id:int}")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult<LibraryDto>> Update(int id, UpdateLibraryRequest req, CancellationToken ct)
+    {
+        var lib = await _db.Libraries.Include(l => l.Paths).FirstOrDefaultAsync(l => l.Id == id, ct);
+        if (lib is null) return NotFound();
+
+        if (req.Name is not null) lib.Name = req.Name;
+        if (req.FolderWatch is { } fw) lib.FolderWatch = fw;
+        if (req.CredentialId is not null) lib.CredentialId = req.CredentialId;
+
+        if (req.Paths is not null)
+        {
+            var paths = NormalizePaths(req.Paths, null);
+            if (paths.Count == 0)
+                return BadRequest(new { error = "A library needs at least one folder path." });
+            if (lib.StorageKind == StorageKind.Smb && lib.CredentialId is null)
+                return BadRequest(new { error = "SMB libraries require a credential." });
+
+            // Keep existing rows whose path is unchanged (preserves any per-path credential overrides),
+            // drop the rest, and add new ones — so the next scan reconciles content for added/removed folders.
+            var keep = lib.Paths.Where(p => paths.Contains(p.Path, StringComparer.OrdinalIgnoreCase)).ToList();
+            foreach (var stale in lib.Paths.Except(keep).ToList())
+                _db.LibraryPaths.Remove(stale);
+            foreach (var p in paths.Where(p => !keep.Any(k => k.Path.Equals(p, StringComparison.OrdinalIgnoreCase))))
+                lib.Paths.Add(new LibraryPath { Path = p });
+
+            lib.RootPath = paths[0];
+        }
+
+        await _db.SaveChangesAsync(ct);
+        await _db.Entry(lib).Collection(l => l.Paths).LoadAsync(ct);
+        var seriesCount = await _db.Series.CountAsync(s => s.LibraryId == lib.Id, ct);
+        return Ok(ToDto(lib, seriesCount));
     }
 
     [HttpDelete("{id:int}")]
@@ -68,6 +112,26 @@ public sealed class LibrariesController : ControllerBase
         await _db.SaveChangesAsync(ct);
         return NoContent();
     }
+
+    /// <summary>Trims, de-duplicates (case-insensitively), and drops empty entries from a path list.</summary>
+    private static List<string> NormalizePaths(IReadOnlyList<string>? paths, string? fallback)
+    {
+        var source = paths is { Count: > 0 } ? paths : (fallback is null ? Array.Empty<string>() : new[] { fallback });
+        var result = new List<string>();
+        foreach (var raw in source)
+        {
+            var p = raw?.Trim();
+            if (string.IsNullOrEmpty(p)) continue;
+            if (!result.Contains(p, StringComparer.OrdinalIgnoreCase)) result.Add(p);
+        }
+        return result;
+    }
+
+    private static LibraryDto ToDto(Library l, int seriesCount) => new(
+        l.Id, l.Name, l.Type, l.StorageKind, l.RootPath, l.CredentialId, l.FolderWatch, l.LastScanAt,
+        seriesCount,
+        (l.Paths ?? new List<LibraryPath>())
+            .Select(p => new LibraryPathDto(p.Id, p.Path, p.CredentialId)).ToList());
 
     [HttpPost("{id:int}/scan")]
     [Authorize(Roles = "Admin")]

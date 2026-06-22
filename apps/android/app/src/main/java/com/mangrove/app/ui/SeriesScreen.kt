@@ -34,8 +34,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -62,15 +64,22 @@ fun SeriesScreen(container: AppContainer, nav: NavController, seriesId: Int) {
     val progress by container.downloadManager.progress.collectAsState()
     var downloadedIds by remember { mutableStateOf<Set<Int>>(emptySet()) }
 
-    LaunchedEffect(seriesId) {
+    val scope = rememberCoroutineScope()
+
+    suspend fun load() {
         runCatching { container.seriesDetail(seriesId) }
-            .onSuccess { detail = it }
-            .onFailure { failed = true }
+            .onSuccess { detail = it; failed = false }
+            .onFailure { if (detail == null) failed = true }
     }
+
+    LaunchedEffect(seriesId) { load() }
     // Refresh the "downloaded" set whenever a download completes.
     LaunchedEffect(progress) {
         downloadedIds = container.downloadStore.allMetas().filter { it.complete }.map { it.chapterId }.toSet()
     }
+    // Pick up newly-scanned chapters automatically while viewing the series.
+    LifecycleResumeRefresh { scope.launch { load() } }
+    AutoRefresh { scope.launch { load() } }
 
     Column(Modifier.fillMaxSize()) {
         Row(

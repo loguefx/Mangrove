@@ -65,6 +65,10 @@ fun HomeScreen(container: AppContainer, nav: NavController) {
     LifecycleResumeRefresh {
         if (firstLoadDone) scope.launch { refreshing = true; fetch(); refreshing = false }
     }
+    // Live updates: silently refresh on an interval while Home is visible (no spinner).
+    AutoRefresh {
+        if (firstLoadDone) scope.launch { fetch() }
+    }
 
     Column(
         Modifier

@@ -35,6 +35,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.mangrove.app.data.AppContainer
+import com.mangrove.app.ui.AdminScreen
 import com.mangrove.app.ui.DownloadsScreen
 import com.mangrove.app.ui.HomeScreen
 import com.mangrove.app.ui.LibrariesScreen
@@ -103,6 +104,7 @@ private fun AppRoot(container: AppContainer) {
                 composable("libraries") { LibrariesScreen(container, nav) }
                 composable("downloads") { DownloadsScreen(container, nav) }
                 composable("profile") { ProfileScreen(container, nav) }
+                composable("admin") { AdminScreen(container, nav) }
                 composable(
                     "library/{id}",
                     arguments = listOf(navArgument("id") { type = NavType.IntType }),

@@ -1,6 +1,7 @@
 package com.mangrove.app.data
 
 import retrofit2.http.Body
+import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
 import retrofit2.http.PUT
@@ -50,4 +51,48 @@ interface MangroveApi {
 
     @GET("api/progress/{chapterId}")
     suspend fun progress(@Path("chapterId") chapterId: Int): ProgressDto
+
+    // ---- Admin ----
+
+    @GET("api/settings")
+    suspend fun settings(): List<SettingDto>
+
+    @PUT("api/settings")
+    suspend fun saveSettings(@Body settings: List<SettingDto>)
+
+    @GET("api/stats/activity")
+    suspend fun activity(): List<ActivityDto>
+
+    @GET("api/users")
+    suspend fun users(): List<AdminUserDto>
+
+    @POST("api/users")
+    suspend fun createUser(@Body body: CreateUserRequest): AdminUserDto
+
+    @PUT("api/users/{id}")
+    suspend fun updateUser(@Path("id") id: Int, @Body body: UpdateUserRequest): AdminUserDto
+
+    @POST("api/users/{id}/reset-password")
+    suspend fun resetPassword(@Path("id") id: Int, @Body body: ResetPasswordRequest)
+
+    @DELETE("api/users/{id}")
+    suspend fun deleteUser(@Path("id") id: Int)
+
+    @POST("api/libraries")
+    suspend fun createLibrary(@Body body: CreateLibraryRequest): LibraryDto
+
+    @PUT("api/libraries/{id}")
+    suspend fun updateLibrary(@Path("id") id: Int, @Body body: UpdateLibraryRequest): LibraryDto
+
+    @DELETE("api/libraries/{id}")
+    suspend fun deleteLibrary(@Path("id") id: Int)
+
+    @POST("api/libraries/{id}/scan")
+    suspend fun scanLibrary(@Path("id") id: Int): ScanStatusDto
+
+    @POST("api/credentials")
+    suspend fun createCredential(@Body body: CreateCredentialRequest): CredentialDto
+
+    @POST("api/storage/test")
+    suspend fun testStorage(@Body body: StorageTestRequest): StorageTestResponse
 }

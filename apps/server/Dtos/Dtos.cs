@@ -15,12 +15,25 @@ public sealed record CreateCredentialRequest(string Label, string Username, stri
 public sealed record CredentialDto(int Id, string Label, string Username, string? Domain, CredentialKind Kind);
 
 // ---- Libraries ----
+/// <summary>One storage folder of a library. <see cref="CredentialId"/> overrides the library credential.</summary>
+public sealed record LibraryPathDto(int Id, string Path, int? CredentialId);
+
+/// <summary>
+/// Create a library. Provide one or more folders in <see cref="Paths"/> (preferred); <see cref="RootPath"/>
+/// is accepted for backwards compatibility and used when <see cref="Paths"/> is empty.
+/// </summary>
 public sealed record CreateLibraryRequest(
-    string Name, LibraryType Type, StorageKind StorageKind, string RootPath, int? CredentialId, bool FolderWatch);
+    string Name, LibraryType Type, StorageKind StorageKind, int? CredentialId, bool FolderWatch,
+    IReadOnlyList<string>? Paths = null, string? RootPath = null);
+
+/// <summary>Edit an existing library. Null fields are left unchanged; a non-null <see cref="Paths"/> replaces all folders.</summary>
+public sealed record UpdateLibraryRequest(
+    string? Name = null, bool? FolderWatch = null, int? CredentialId = null, IReadOnlyList<string>? Paths = null);
 
 public sealed record LibraryDto(
     int Id, string Name, LibraryType Type, StorageKind StorageKind, string RootPath,
-    int? CredentialId, bool FolderWatch, DateTime? LastScanAt, int SeriesCount);
+    int? CredentialId, bool FolderWatch, DateTime? LastScanAt, int SeriesCount,
+    IReadOnlyList<LibraryPathDto> Paths);
 
 public sealed record ScanResponse(int FilesSeen, int ChaptersAdded, int ChaptersUpdated, int ChaptersRemoved, int SeriesCount);
 
@@ -89,6 +102,14 @@ public sealed record ReviewDto(int UserId, string Username, int SeriesId, int St
 public sealed record ServerStatsDto(
     int Users, int Libraries, int Series, int Volumes, int Chapters, long TotalBytes, int TotalPages);
 public sealed record UserStatsDto(int ChaptersRead, int PagesRead, int InProgress, int WantToReadCount);
+/// <summary>
+/// A reading-activity entry (admin-only). <paramref name="Status"/> is "reading" (stopped mid-chapter),
+/// "finished" (completed the chapter), or "caught-up" (finished the latest chapter of the series).
+/// </summary>
+public sealed record ActivityDto(
+    int UserId, string Username, int? SeriesId, string? SeriesName,
+    int ChapterId, float ChapterNumber, string? ChapterTitle,
+    int Page, int PageCount, bool IsRead, bool CaughtUp, string Status, DateTime UpdatedAt);
 public sealed record SettingDto(string Key, string? Value);
 public sealed record TaskLogDto(int Id, string Kind, string? Target, string Status, string? Message, DateTime StartedAt, DateTime? FinishedAt);
 

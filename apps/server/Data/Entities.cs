@@ -75,6 +75,10 @@ public class Library
     public string Name { get; set; } = string.Empty;
     public LibraryType Type { get; set; } = LibraryType.Manga;
     public StorageKind StorageKind { get; set; } = StorageKind.Local;
+    /// <summary>
+    /// Primary/first folder of the library. Kept in sync with <see cref="Paths"/>[0] for backwards
+    /// compatibility and display; the scanner walks every entry in <see cref="Paths"/>.
+    /// </summary>
     public string RootPath { get; set; } = string.Empty;
     public int? CredentialId { get; set; }
     public Credential? Credential { get; set; }
@@ -82,8 +86,25 @@ public class Library
     public DateTime? LastScanAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
 
+    /// <summary>All storage folders that make up this library (a series can span several of them).</summary>
+    public List<LibraryPath> Paths { get; set; } = new();
     public List<Series> Series { get; set; } = new();
     public List<LibraryAccess> LibraryAccess { get; set; } = new();
+}
+
+/// <summary>
+/// One storage folder belonging to a <see cref="Library"/>. A library can have several (e.g. when a
+/// NAS share fills up and content continues on another share). Each path may optionally use its own
+/// credential; when null it falls back to the library's credential.
+/// </summary>
+public class LibraryPath
+{
+    public int Id { get; set; }
+    public int LibraryId { get; set; }
+    public Library Library { get; set; } = null!;
+    public string Path { get; set; } = string.Empty;
+    public int? CredentialId { get; set; }
+    public Credential? Credential { get; set; }
 }
 
 public class LibraryAccess

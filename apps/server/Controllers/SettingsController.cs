@@ -21,6 +21,10 @@ public sealed class SettingsController : ControllerBase
         ["server.baseUrl"] = "",
         ["theme.default"] = "dark",
         ["scan.onStartup"] = "false",
+        // Automatic library re-scan cadence. New chapters/series are detected and shown without a manual
+        // scan. Scans are incremental (unchanged files are skipped), so this is cheap after the first run.
+        // 0 disables automatic scanning. Values below 5 are treated as 5 to protect the storage backend.
+        ["scan.intervalMinutes"] = "15",
     };
 
     [HttpGet]

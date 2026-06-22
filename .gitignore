@@ -33,6 +33,9 @@ apps/android/build/
 apps/android/app/build/
 .idea/
 
+# ---- Logs ----
+*.log
+
 # ---- OS / editor ----
 .DS_Store
 Thumbs.db

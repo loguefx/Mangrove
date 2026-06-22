@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   api,
+  type ActivityDto,
   type AdminUserDto,
   type LibraryDto,
   type ServerStatsDto,
@@ -9,8 +10,9 @@ import {
 } from "../api";
 import { PageHeader } from "../components/SeriesGrid";
 import { Spinner } from "../components/Spinner";
+import { AddLibraryDialog } from "../components/AddLibraryDialog";
 
-const TABS = ["Users", "Tasks", "Stats", "Settings"] as const;
+const TABS = ["Users", "Activity", "Libraries", "Tasks", "Stats", "Settings"] as const;
 type Tab = (typeof TABS)[number];
 
 const AGE_TIERS = ["No restriction", "Everyone", "Everyone 10+", "Teen", "Mature 17+", "Adults Only 18+"];
@@ -38,6 +40,8 @@ export default function Admin() {
         ))}
       </div>
       {tab === "Users" && <UsersTab />}
+      {tab === "Activity" && <ActivityTab />}
+      {tab === "Libraries" && <LibrariesTab />}
       {tab === "Tasks" && <TasksTab />}
       {tab === "Stats" && <StatsTab />}
       {tab === "Settings" && <SettingsTab />}
@@ -473,6 +477,143 @@ function StatsTab() {
   );
 }
 
+function timeAgo(iso: string): string {
+  const then = new Date(iso).getTime();
+  const secs = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (secs < 60) return "just now";
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins} min${mins === 1 ? "" : "s"} ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hour${hrs === 1 ? "" : "s"} ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days} day${days === 1 ? "" : "s"} ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+function activityDescription(a: ActivityDto): { text: string; tone: string } {
+  const series = a.seriesName ?? "Unknown series";
+  const ch = `Ch. ${a.chapterNumber}${a.chapterTitle ? ` — ${a.chapterTitle}` : ""}`;
+  if (a.status === "caught-up")
+    return { text: `Caught up on ${series} — finished ${ch}`, tone: "text-teal-mint" };
+  if (a.status === "finished")
+    return { text: `Finished ${ch} of ${series}`, tone: "text-teal-mint" };
+  return {
+    text: `Left off on page ${a.page}${a.pageCount ? `/${a.pageCount}` : ""} of ${ch} — ${series}`,
+    tone: "text-amber-400",
+  };
+}
+
+function ActivityRow({ a, showUser = true }: { a: ActivityDto; showUser?: boolean }) {
+  const d = activityDescription(a);
+  return (
+    <div className="flex items-center gap-3 rounded-2xl border border-neutral-800 bg-neutral-900/40 p-3">
+      {showUser && (
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-teal/20 text-sm font-semibold uppercase text-teal-mint">
+          {a.username.slice(0, 2)}
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        {showUser && <div className="truncate font-medium">{a.username}</div>}
+        <div className={`truncate text-sm ${d.tone}`}>{d.text}</div>
+      </div>
+      <div className="shrink-0 text-xs text-neutral-400">{timeAgo(a.updatedAt)}</div>
+    </div>
+  );
+}
+
+function ActivityTab() {
+  const [rows, setRows] = useState<ActivityDto[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const load = () => api.activity().then(setRows).catch(() => setRows([]));
+    load().finally(() => setLoading(false));
+    const iv = setInterval(() => {
+      if (!document.hidden) load();
+    }, 30000);
+    return () => clearInterval(iv);
+  }, []);
+
+  if (loading) return <Spinner />;
+  if (rows.length === 0)
+    return <p className="text-sm text-neutral-500">No reading activity yet.</p>;
+
+  // "Currently reading": each user's most recent unfinished chapter.
+  const currentByUser = new Map<number, ActivityDto>();
+  for (const r of rows) {
+    if (r.status === "reading" && !currentByUser.has(r.userId)) currentByUser.set(r.userId, r);
+  }
+  const current = [...currentByUser.values()];
+
+  return (
+    <div className="space-y-6">
+      <section>
+        <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-400">
+          Currently reading
+        </h3>
+        {current.length === 0 ? (
+          <p className="text-sm text-neutral-500">Nobody has a chapter open right now.</p>
+        ) : (
+          <div className="space-y-2">
+            {current.map((a) => (
+              <div
+                key={a.userId}
+                className="flex items-center gap-3 rounded-2xl border border-neutral-800 bg-neutral-900/40 p-3"
+              >
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-teal/20 text-sm font-semibold uppercase text-teal-mint">
+                  {a.username.slice(0, 2)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-medium">{a.username}</div>
+                  <div className="truncate text-sm text-neutral-400">
+                    {a.seriesName ?? "Unknown series"} · Ch. {a.chapterNumber}
+                    {a.chapterTitle ? ` — ${a.chapterTitle}` : ""}
+                  </div>
+                </div>
+                <div className="shrink-0 text-right">
+                  <div className="text-sm font-semibold text-amber-400">
+                    p. {a.page}
+                    {a.pageCount ? `/${a.pageCount}` : ""}
+                  </div>
+                  <div className="text-xs text-neutral-500">{timeAgo(a.updatedAt)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section>
+        <h3 className="mb-2 text-sm font-semibold uppercase tracking-wide text-neutral-400">
+          Recent activity
+        </h3>
+        <div className="space-y-2">
+          {rows.map((a) => (
+            <ActivityRow key={`${a.userId}-${a.chapterId}`} a={a} />
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+type SettingMeta = { label: string; help?: string; kind: "text" | "number" | "bool" };
+const SETTING_META: Record<string, SettingMeta> = {
+  "scan.intervalMinutes": {
+    label: "Auto-scan interval (minutes)",
+    help: "How often libraries are re-scanned so new chapters appear automatically. 0 disables it; values below 5 are treated as 5.",
+    kind: "number",
+  },
+  "scan.onStartup": {
+    label: "Scan on startup",
+    help: "Run a scan shortly after the server starts.",
+    kind: "bool",
+  },
+  "opds.enabled": { label: "Enable OPDS feed", kind: "bool" },
+  "server.baseUrl": { label: "Public base URL", help: "Used for OPDS/links when behind a proxy.", kind: "text" },
+  "theme.default": { label: "Default theme", kind: "text" },
+};
+
 function SettingsTab() {
   const [settings, setSettings] = useState<SettingDto[]>([]);
   const [loading, setLoading] = useState(true);
@@ -481,6 +622,9 @@ function SettingsTab() {
   useEffect(() => {
     api.settings().then(setSettings).catch(() => setSettings([])).finally(() => setLoading(false));
   }, []);
+
+  const setValue = (i: number, value: string) =>
+    setSettings((prev) => prev.map((s, idx) => (idx === i ? { ...s, value } : s)));
 
   const save = async () => {
     await api.saveSettings(settings);
@@ -491,21 +635,39 @@ function SettingsTab() {
   if (loading) return <Spinner />;
 
   return (
-    <div className="space-y-3">
-      {settings.map((s, i) => (
-        <div key={s.key} className="flex items-center gap-3">
-          <label className="w-48 text-sm text-neutral-400">{s.key}</label>
-          <input
-            value={s.value ?? ""}
-            onChange={(e) => {
-              const next = [...settings];
-              next[i] = { ...s, value: e.target.value };
-              setSettings(next);
-            }}
-            className="input flex-1"
-          />
-        </div>
-      ))}
+    <div className="space-y-4">
+      {settings.map((s, i) => {
+        const meta = SETTING_META[s.key] ?? { label: s.key, kind: "text" as const };
+        return (
+          <div key={s.key} className="flex items-start gap-3">
+            <div className="w-56 pt-2">
+              <label className="text-sm text-neutral-300">{meta.label}</label>
+              {meta.help && <p className="mt-0.5 text-xs text-neutral-500">{meta.help}</p>}
+            </div>
+            <div className="flex-1">
+              {meta.kind === "bool" ? (
+                <label className="mt-1 inline-flex cursor-pointer items-center gap-2 text-sm text-neutral-300">
+                  <input
+                    type="checkbox"
+                    checked={String(s.value).toLowerCase() === "true"}
+                    onChange={(e) => setValue(i, e.target.checked ? "true" : "false")}
+                    className="h-4 w-4 accent-teal"
+                  />
+                  {String(s.value).toLowerCase() === "true" ? "Enabled" : "Disabled"}
+                </label>
+              ) : (
+                <input
+                  type={meta.kind === "number" ? "number" : "text"}
+                  min={meta.kind === "number" ? 0 : undefined}
+                  value={s.value ?? ""}
+                  onChange={(e) => setValue(i, e.target.value)}
+                  className="input w-full"
+                />
+              )}
+            </div>
+          </div>
+        );
+      })}
       <div className="flex items-center gap-2 pt-2">
         <button
           onClick={save}
@@ -514,6 +676,279 @@ function SettingsTab() {
           Save settings
         </button>
         {msg && <span className="text-sm text-teal-mint">{msg}</span>}
+      </div>
+    </div>
+  );
+}
+
+function LibrariesTab() {
+  const [libraries, setLibraries] = useState<LibraryDto[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [adding, setAdding] = useState(false);
+  const [editId, setEditId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = () =>
+    api.libraries().then(setLibraries).catch(() => setLibraries([])).finally(() => setLoading(false));
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const scan = async (id: number) => {
+    try {
+      await api.scanLibrary(id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Scan failed");
+    }
+  };
+
+  const remove = async (lib: LibraryDto) => {
+    if (!confirm(`Delete library "${lib.name}"? This removes its catalog entries (files on disk are untouched).`))
+      return;
+    try {
+      await api.deleteLibrary(lib.id);
+      setLibraries((prev) => prev.filter((l) => l.id !== lib.id));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+    }
+  };
+
+  if (loading) return <Spinner />;
+
+  return (
+    <div className="space-y-4">
+      {error && <div className="rounded-xl bg-red-500/10 px-3 py-2 text-sm text-red-400">{error}</div>}
+
+      <div className="flex justify-between">
+        <p className="text-sm text-neutral-400">
+          Configure libraries and their storage folders. Add a folder to a library when it spans more
+          than one location (e.g. a NAS share that ran out of space).
+        </p>
+        <button
+          onClick={() => setAdding(true)}
+          className="shrink-0 rounded-xl bg-teal px-4 py-1.5 text-sm font-medium text-white hover:bg-teal/90"
+        >
+          + Add library
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        {libraries.map((lib) => (
+          <div key={lib.id} className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="font-medium">{lib.name}</div>
+                <div className="text-xs text-neutral-500">
+                  {lib.storageKind === 1 ? "SMB / UNC" : "Local"} · {lib.seriesCount} series ·{" "}
+                  {(lib.paths?.length ?? 0) || 1} folder{(lib.paths?.length ?? 1) === 1 ? "" : "s"}
+                </div>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  onClick={() => scan(lib.id)}
+                  className="rounded-lg bg-neutral-800 px-3 py-1.5 text-sm text-neutral-200 hover:bg-neutral-700"
+                >
+                  Scan
+                </button>
+                <button
+                  onClick={() => setEditId(lib.id)}
+                  className="rounded-lg bg-neutral-800 px-3 py-1.5 text-sm text-neutral-200 hover:bg-neutral-700"
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => remove(lib)}
+                  className="rounded-lg bg-red-500/10 px-3 py-1.5 text-sm text-red-400 hover:bg-red-500/20"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+            <ul className="mt-3 space-y-1">
+              {(lib.paths?.length ? lib.paths.map((p) => p.path) : [lib.rootPath]).map((p, i) => (
+                <li key={i} className="truncate rounded-lg bg-neutral-800/60 px-3 py-1.5 text-sm text-neutral-300">
+                  {p}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+        {libraries.length === 0 && (
+          <p className="text-sm text-neutral-500">No libraries yet. Add one to get started.</p>
+        )}
+      </div>
+
+      {adding && (
+        <AddLibraryDialog
+          onClose={() => setAdding(false)}
+          onCreated={() => {
+            setAdding(false);
+            load();
+          }}
+        />
+      )}
+      {editId !== null && (
+        <EditLibraryDialog
+          library={libraries.find((l) => l.id === editId)!}
+          onClose={() => setEditId(null)}
+          onSaved={() => {
+            setEditId(null);
+            load();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function EditLibraryDialog({
+  library,
+  onClose,
+  onSaved,
+}: {
+  library: LibraryDto;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(library.name);
+  const [folderWatch, setFolderWatch] = useState(library.folderWatch);
+  const [paths, setPaths] = useState<string[]>(
+    library.paths?.length ? library.paths.map((p) => p.path) : [library.rootPath]
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [testMsg, setTestMsg] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const isSmb = library.storageKind === 1;
+  const cleanPaths = paths.map((p) => p.trim()).filter(Boolean);
+
+  const setPath = (i: number, value: string) =>
+    setPaths((prev) => prev.map((p, idx) => (idx === i ? value : p)));
+
+  const test = async () => {
+    setBusy(true);
+    setTestMsg(null);
+    try {
+      for (const p of cleanPaths) {
+        const r = await api.testStorage({ storageKind: library.storageKind, rootPath: p });
+        if (!r.success) {
+          setTestMsg({ ok: false, message: `${p}: ${r.message}` });
+          return;
+        }
+      }
+      setTestMsg({ ok: true, message: "All folders are reachable." });
+    } catch (err) {
+      setTestMsg({ ok: false, message: err instanceof Error ? err.message : "Test failed" });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const save = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.updateLibrary(library.id, { name, folderWatch, paths: cleanPaths });
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save library");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="w-full max-w-lg rounded-2xl bg-neutral-900 p-6 shadow-2xl ring-1 ring-white/10">
+        <h2 className="mb-4 text-lg font-semibold">Edit library</h2>
+
+        <div className="space-y-3">
+          <label className="block">
+            <span className="mb-1 block text-sm text-neutral-400">Name</span>
+            <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
+          </label>
+
+          <div className="space-y-2">
+            <span className="block text-sm text-neutral-400">
+              Folders {isSmb ? "(SMB / UNC)" : "(local)"}
+            </span>
+            {paths.map((p, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <input
+                  className="input flex-1"
+                  value={p}
+                  onChange={(e) => setPath(i, e.target.value)}
+                  placeholder={isSmb ? "\\\\NAS\\Manga" : "C:\\Manga"}
+                />
+                <button
+                  onClick={() => setPaths((prev) => (prev.length === 1 ? prev : prev.filter((_, idx) => idx !== i)))}
+                  disabled={paths.length === 1}
+                  title="Remove folder"
+                  className="rounded-lg bg-neutral-800 px-3 py-2 text-sm text-neutral-300 hover:bg-neutral-700 disabled:opacity-30"
+                >
+                  −
+                </button>
+              </div>
+            ))}
+            <button
+              onClick={() => setPaths((prev) => [...prev, ""])}
+              className="text-sm text-teal-mint hover:underline"
+            >
+              + Add another folder
+            </button>
+            <p className="text-xs text-neutral-500">
+              New folders use this library's existing credentials. Removing a folder drops its content
+              from the catalog on the next scan (files on disk are untouched).
+            </p>
+          </div>
+
+          <label className="inline-flex cursor-pointer items-center gap-2 text-sm text-neutral-300">
+            <input
+              type="checkbox"
+              checked={folderWatch}
+              onChange={(e) => setFolderWatch(e.target.checked)}
+              className="h-4 w-4 accent-teal"
+            />
+            Watch folders for changes
+          </label>
+
+          {testMsg && (
+            <div
+              className={`rounded-xl px-3 py-2 text-sm ${
+                testMsg.ok ? "bg-teal/10 text-teal-mint" : "bg-red-500/10 text-red-400"
+              }`}
+            >
+              {testMsg.message}
+            </div>
+          )}
+          {error && <div className="text-sm text-red-400">{error}</div>}
+        </div>
+
+        <div className="mt-6 flex items-center justify-between">
+          <button
+            onClick={test}
+            disabled={busy || cleanPaths.length === 0}
+            className="rounded-xl bg-neutral-800 px-4 py-2 text-sm text-neutral-200 hover:bg-neutral-700 disabled:opacity-50"
+          >
+            Test connection
+          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={onClose}
+              className="rounded-xl px-4 py-2 text-sm text-neutral-400 hover:text-neutral-200"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={save}
+              disabled={busy || !name || cleanPaths.length === 0}
+              className="rounded-xl bg-teal px-4 py-2 text-sm font-medium text-white hover:bg-teal/90 disabled:opacity-50"
+            >
+              Save
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

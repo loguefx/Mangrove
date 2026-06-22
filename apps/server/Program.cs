@@ -71,6 +71,8 @@ builder.Services.AddScoped<LibraryScanner>();
 // Background scanning: scans run on a worker so HTTP requests return immediately.
 builder.Services.AddSingleton<ScanJobQueue>();
 builder.Services.AddHostedService<ScanBackgroundService>();
+// Periodically re-scans libraries so new chapters are detected automatically (scan.intervalMinutes).
+builder.Services.AddHostedService<PeriodicScanService>();
 
 // ---- Auth ----
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)

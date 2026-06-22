@@ -271,6 +271,58 @@ public class LibraryScannerTests : IDisposable
         Assert.Equal(0, await _db.Chapters.CountAsync());
     }
 
+    private static void CreateCbzIn(string root, string seriesFolder, string fileName, int pageCount)
+    {
+        var dir = Path.Combine(root, seriesFolder);
+        Directory.CreateDirectory(dir);
+        using var zip = ZipFile.Open(Path.Combine(dir, fileName), ZipArchiveMode.Create);
+        for (var i = 1; i <= pageCount; i++)
+        {
+            var entry = zip.CreateEntry($"{i:00}.jpg");
+            using var s = entry.Open();
+            s.Write(new byte[] { 0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4 });
+        }
+    }
+
+    [Fact]
+    public async Task Scan_WalksMultipleLibraryPaths_AndMergesSeriesAcrossThem()
+    {
+        // A library spanning two folders, with the same series split across both (the "ran out of
+        // space, continue on another share" case).
+        var root2 = Path.Combine(Directory.GetParent(_root)!.FullName, "library2");
+        Directory.CreateDirectory(root2);
+
+        CreateCbz("Blue Lock", "Blue Lock Ch.0001.cbz", 2);
+        CreateCbzIn(root2, "Blue Lock", "Blue Lock Ch.0002.cbz", 2);
+        CreateCbzIn(root2, "Another Series", "Another Series Ch.0001.cbz", 2);
+
+        var lib = new Library
+        {
+            Name = "Multi",
+            Type = LibraryType.Manga,
+            StorageKind = StorageKind.Local,
+            RootPath = _root,
+            Paths = new List<LibraryPath>
+            {
+                new() { Path = _root },
+                new() { Path = root2 },
+            },
+        };
+        _db.Libraries.Add(lib);
+        await _db.SaveChangesAsync();
+
+        var result = await BuildScanner().ScanAsync(lib.Id);
+
+        Assert.Equal(3, result.ChaptersAdded);
+        Assert.Equal(2, result.SeriesCount);
+
+        var blueLock = await _db.Series
+            .Include(s => s.Volumes).ThenInclude(v => v.Chapters)
+            .FirstAsync(s => s.Name == "Blue Lock");
+        // Both chapters (one from each folder) landed under the same series.
+        Assert.Equal(2, blueLock.Volumes.SelectMany(v => v.Chapters).Count());
+    }
+
     public void Dispose()
     {
         _db.Dispose();
