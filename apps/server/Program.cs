@@ -131,8 +131,8 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
-app.Logger.LogInformation("{AppName} API listening. DB: {Db}, Cache: {Cache}",
-    AppConstants.AppName, paths.DbPath, paths.CacheDir);
+app.Logger.LogInformation("{AppName} v{Version} API listening. DB: {Db}, Cache: {Cache}",
+    AppConstants.AppName, AppConstants.Version, paths.DbPath, paths.CacheDir);
 
 app.Run();
 return 0;
