@@ -126,10 +126,19 @@ using (var scope = app.Services.CreateScope())
 app.UseSwagger();
 app.UseSwaggerUI();
 
+// Serve the built web UI (apps/web -> wwwroot) so a single deployment is browsable at the root.
+// In dev the SPA runs under Vite (port 5173); in a published build wwwroot is populated by CI.
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
 app.UseCors(WebCors);
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+
+// Client-side routes (e.g. /library/3, /reader/...) fall back to the SPA shell. API/Swagger
+// routes are matched first, so this only catches browser navigations. No-op if wwwroot is empty.
+app.MapFallbackToFile("index.html");
 
 app.Logger.LogInformation("{AppName} v{Version} API listening. DB: {Db}, Cache: {Cache}",
     AppConstants.AppName, AppConstants.Version, paths.DbPath, paths.CacheDir);

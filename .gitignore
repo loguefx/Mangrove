@@ -24,6 +24,7 @@ obj/
 # ---- Node / web ----
 node_modules/
 apps/web/dist/
+apps/server/wwwroot/
 *.local
 
 # ---- Android ----
