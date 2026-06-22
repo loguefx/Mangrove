@@ -1,6 +1,10 @@
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Runtime.Versioning;
 using System.Security.Principal;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Mangrove.Server.Hosting;
 
@@ -82,6 +86,9 @@ public static class ServiceInstaller
             return 1;
         }
 
+        var dir = Path.GetDirectoryName(exePath)!;
+        var port = Environment.GetEnvironmentVariable("MANGROVE_PORT") ?? "5173";
+
         // Double-quote the path so the stored ImagePath survives spaces (e.g. "C:\Program Files\...").
         var binPath = $"\"\\\"{exePath}\\\"\"";
         var create = Sc($"create {ServiceName} binPath= {binPath} start= auto DisplayName= \"{DisplayName}\"");
@@ -99,10 +106,9 @@ public static class ServiceInstaller
         // Start it right away so the endpoint is immediately browsable after install.
         var start = Sc($"start {ServiceName}");
 
-        var port = Environment.GetEnvironmentVariable("MANGROVE_PORT") ?? "5000";
         Console.WriteLine();
         Console.WriteLine($"Installed '{ServiceName}'. Data lives next to the executable:");
-        Console.WriteLine($"  {Path.GetDirectoryName(exePath)}");
+        Console.WriteLine($"  {dir}");
         if (start == 0)
         {
             Console.WriteLine();

@@ -32,8 +32,10 @@ builder.Host.UseWindowsService(options => options.ServiceName = ServiceInstaller
 
 var startupLogger = LoggerFactory.Create(b => b.AddConsole()).CreateLogger("Startup");
 
+// Default port is 5173 (5000 is commonly taken by other apps). Override with MANGROVE_PORT in
+// appsettings.json or the environment.
 var port = builder.Configuration["MANGROVE_PORT"]
-           ?? Environment.GetEnvironmentVariable("MANGROVE_PORT") ?? "5000";
+           ?? Environment.GetEnvironmentVariable("MANGROVE_PORT") ?? "5173";
 builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 
 // ---- Runtime config (spec §12) ----
@@ -140,11 +142,31 @@ app.MapControllers();
 // routes are matched first, so this only catches browser navigations. No-op if wwwroot is empty.
 app.MapFallbackToFile("index.html");
 
-app.Logger.LogInformation("{AppName} v{Version} API listening. DB: {Db}, Cache: {Cache}",
-    AppConstants.AppName, AppConstants.Version, paths.DbPath, paths.CacheDir);
+app.Logger.LogInformation("{AppName} v{Version} listening on http://0.0.0.0:{Port}. DB: {Db}, Cache: {Cache}",
+    AppConstants.AppName, AppConstants.Version, port, paths.DbPath, paths.CacheDir);
 
-app.Run();
+try
+{
+    app.Run();
+}
+catch (IOException ex) when (IsAddressInUse(ex))
+{
+    // Most common deployment failure: another program already owns the port. When running as a
+    // Windows service this otherwise surfaces only as an opaque APPCRASH in the Event Log, so log a
+    // clear, actionable message (visible in Event Viewer) and exit cleanly.
+    app.Logger.LogCritical(
+        "Mangrove could not start because port {Port} is already in use by another program. " +
+        "Set \"MANGROVE_PORT\" to a free port in appsettings.json next to Mangrove.exe, then restart " +
+        "the service. Browse to http://localhost:<port> afterwards.",
+        port);
+    return 2;
+}
 return 0;
+
+static bool IsAddressInUse(IOException ex) =>
+    ex is Microsoft.AspNetCore.Connections.AddressInUseException ||
+    ex.InnerException is Microsoft.AspNetCore.Connections.AddressInUseException ||
+    ex.Message.Contains("address already in use", StringComparison.OrdinalIgnoreCase);
 
 static async Task SeedRolesAsync(MangroveDbContext db)
 {
