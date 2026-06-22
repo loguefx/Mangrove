@@ -96,11 +96,26 @@ public static class ServiceInstaller
         // Auto-restart on crash: after 5s, 5s, then every 60s.
         Sc($"failure {ServiceName} reset= 86400 actions= restart/5000/restart/5000/restart/60000");
 
+        // Start it right away so the endpoint is immediately browsable after install.
+        var start = Sc($"start {ServiceName}");
+
+        var port = Environment.GetEnvironmentVariable("MANGROVE_PORT") ?? "5000";
         Console.WriteLine();
         Console.WriteLine($"Installed '{ServiceName}'. Data lives next to the executable:");
         Console.WriteLine($"  {Path.GetDirectoryName(exePath)}");
-        Console.WriteLine("Start it now with:  Mangrove.exe start");
-        Console.WriteLine("It will also start automatically on boot.");
+        if (start == 0)
+        {
+            Console.WriteLine();
+            Console.WriteLine("Service started. It also starts automatically on boot.");
+            Console.WriteLine("Open the web UI at:");
+            Console.WriteLine($"  http://localhost:{port}");
+            Console.WriteLine($"  http://{Environment.MachineName}:{port}   (from other devices on your network)");
+        }
+        else
+        {
+            Console.WriteLine();
+            Console.WriteLine("Service installed but did not start. Try:  Mangrove.exe start");
+        }
         return 0;
     }
 
