@@ -5,6 +5,8 @@
 *.jks
 *.keystore
 local.properties
+secrets.json
+apps/server/secrets.json
 
 # ---- Runtime data (never commit) ----
 mangrove.db

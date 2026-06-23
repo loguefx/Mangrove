@@ -138,10 +138,29 @@ public sealed class LibraryScanner
             await CollectUnitsAsync(prov, root, root, 0, units, ct);
         }
 
+        // Quick pass: create every series and apply its folder cover + sidecar ComicInfo.xml up
+        // front. This is cheap (a directory list + small XML per series) and is saved immediately,
+        // so covers and metadata appear right away and survive even if the slower page-counting
+        // pass below is interrupted (which is what previously left metadata unpopulated).
+        var seriesCache = new Dictionary<string, Series>(StringComparer.OrdinalIgnoreCase);
+        var seriesAssetDir = new Dictionary<string, (string Dir, IStorageProvider Provider)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var unit in units)
+        {
+            var (sName, _) = ResolveSeries(unit);
+            if (!seriesCache.ContainsKey(sName))
+                seriesCache[sName] = await GetOrCreateSeriesAsync(library.Id, sName, ct);
+            if (!seriesAssetDir.ContainsKey(sName) && TryGetSeriesDir(unit, out var sDir))
+                seriesAssetDir[sName] = (sDir, unit.Provider);
+        }
+        foreach (var (sName, target) in seriesAssetDir)
+        {
+            ct.ThrowIfCancellationRequested();
+            await TryApplyFolderAssetsAsync(seriesCache[sName], target.Dir, target.Provider, ct);
+        }
+
         var added = 0;
         var updated = 0;
         var seenPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var folderCoverTried = new HashSet<int>();
 
         foreach (var unit in units)
         {
@@ -158,15 +177,12 @@ public sealed class LibraryScanner
                 continue; // unchanged — skip needless I/O (spec §8)
 
             var (seriesName, parsed) = ResolveSeries(unit);
+            if (!seriesCache.TryGetValue(seriesName, out var series))
+            {
+                series = await GetOrCreateSeriesAsync(library.Id, seriesName, ct);
+                seriesCache[seriesName] = series;
+            }
 
-            var series = await GetOrCreateSeriesAsync(library.Id, seriesName, ct);
-
-            // Apply the series-level cover (folder.jpg/cover.jpg/...) the first time we see a series,
-            // BEFORE caching any chapter page — so a real cover always wins over an extracted page, and
-            // covers land immediately rather than only after the whole (slow, interruptible) scan. The
-            // end-of-scan pass below is kept as a safety net (e.g. art added after the initial scan).
-            if (folderCoverTried.Add(series.Id) && TryGetSeriesDir(unit, out var seriesDir))
-                await TryApplyFolderCoverAsync(series, seriesDir, unit.Provider, ct);
             var volume = await GetOrCreateVolumeAsync(series, parsed.Volume ?? 0, ct);
             var chapter = await GetOrCreateChapterAsync(volume, parsed, unit, ct);
 
@@ -212,11 +228,6 @@ public sealed class LibraryScanner
 
             await _db.SaveChangesAsync(ct);
         }
-
-        // Apply series-level sidecar assets sitting next to the chapters: a cover image
-        // (folder.jpg/cover.jpg/poster.jpg) and a ComicInfo.xml metadata file. This is the common
-        // manga layout (and matches Jellyfin/Kavita conventions).
-        await ApplyFolderAssetsAsync(library, units, ct);
 
         var removed = await RemoveMissingAsync(library.Id, seenPaths, ct);
 
@@ -355,44 +366,27 @@ public sealed class LibraryScanner
     private static readonly string[] CoverFileNames = { "folder", "cover", "poster", "default" };
 
     /// <summary>
-    /// For each series in this scan, reads its top-level folder for sidecar assets: a cover image
-    /// (folder.jpg/cover.jpg/poster.jpg) and a series-level <c>ComicInfo.xml</c>. Runs on every scan
-    /// (including incremental) so existing libraries pick up art and metadata added after the first scan.
+    /// Reads a series' top-level folder once and applies its sidecar assets: a cover image
+    /// (folder.jpg/cover.jpg/poster.jpg, only when the series has none yet) and a series-level
+    /// <c>ComicInfo.xml</c>. Saved immediately so assets survive an interrupted scan.
     /// </summary>
-    private async Task ApplyFolderAssetsAsync(
-        Library library, List<ContentUnit> units, CancellationToken ct)
+    private async Task TryApplyFolderAssetsAsync(
+        Series series, string dir, IStorageProvider provider, CancellationToken ct)
     {
-        // Map series name -> the folder that holds its assets, plus the provider that can read it.
-        // First occurrence wins (a series can appear under several paths).
-        var seriesDirs = new Dictionary<string, (string Dir, IStorageProvider Provider)>(StringComparer.OrdinalIgnoreCase);
-        foreach (var unit in units)
+        IReadOnlyList<StorageEntry> entries;
+        try
         {
-            if (!TryGetSeriesDir(unit, out var dir)) continue;
-            var (seriesName, _) = ResolveSeries(unit);
-            seriesDirs.TryAdd(seriesName, (dir, unit.Provider));
+            entries = await provider.ListAsync(dir, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to list series folder '{Dir}' for assets", dir);
+            return;
         }
 
-        foreach (var (seriesName, target) in seriesDirs)
-        {
-            ct.ThrowIfCancellationRequested();
-            var series = await _db.Series
-                .FirstOrDefaultAsync(s => s.LibraryId == library.Id && s.Name == seriesName, ct);
-            if (series is null) continue;
-
-            IReadOnlyList<StorageEntry> entries;
-            try
-            {
-                entries = await target.Provider.ListAsync(target.Dir, ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to list series folder '{Dir}' for assets", target.Dir);
-                continue;
-            }
-
-            await TryApplyFolderCoverAsync(series, entries, target.Provider, ct);
-            await TryApplySidecarMetadataAsync(series, entries, target.Provider, ct);
-        }
+        if (string.IsNullOrEmpty(series.CoverPath) || !File.Exists(series.CoverPath))
+            await TryApplyFolderCoverAsync(series, entries, provider, ct);
+        await TryApplySidecarMetadataAsync(series, entries, provider, ct);
     }
 
     /// <summary>
@@ -407,25 +401,6 @@ public sealed class LibraryScanner
         if (!unit.IsFolder && unit.Segments.Length < 2) return false;
         dir = JoinPath(unit.Root, unit.Segments[0]);
         return true;
-    }
-
-    /// <summary>
-    /// Lists <paramref name="dir"/> and applies a series-level cover image when present. Convenience
-    /// wrapper used during the main scan loop (where entries haven't been listed yet).
-    /// </summary>
-    private async Task<bool> TryApplyFolderCoverAsync(
-        Series series, string dir, IStorageProvider provider, CancellationToken ct)
-    {
-        try
-        {
-            var entries = await provider.ListAsync(dir, ct);
-            return await TryApplyFolderCoverAsync(series, entries, provider, ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to apply folder cover for series '{Series}' from '{Dir}'", series.Name, dir);
-            return false;
-        }
     }
 
     /// <summary>

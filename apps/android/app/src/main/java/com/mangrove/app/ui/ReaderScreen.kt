@@ -113,6 +113,9 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
             reverseLayout = rtl,
             // While zoomed in, lock paging so horizontal drags pan the page instead.
             userScrollEnabled = scale <= 1.01f,
+            // Compose neighbouring pages ahead of time so their images are already
+            // loaded (and cached) by the time you swipe to them.
+            beyondViewportPageCount = 2,
             modifier = Modifier.fillMaxSize(),
         ) { page ->
             ZoomableImage(

@@ -301,9 +301,9 @@ function Paged(props: {
       if (!active) return;
       setUrls(res);
       setLoading(false);
-      // Prefetch the next spread.
-      const next = spreads[spreadIdx + 1];
-      if (next) next.forEach((p) => void loadPage(p));
+      // Warm the next few spreads (and the previous one) so page turns are instant.
+      for (let d = 1; d <= 3; d++) spreads[spreadIdx + d]?.forEach((p) => void loadPage(p));
+      spreads[spreadIdx - 1]?.forEach((p) => void loadPage(p));
     });
     void api.saveProgress(manifest.id, current[0]).catch(() => undefined);
     return () => {
@@ -445,7 +445,7 @@ function Webtoon({
           });
         });
       },
-      { rootMargin: "1500px 0px" }
+      { rootMargin: "3000px 0px" }
     );
     return () => observer.current?.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps

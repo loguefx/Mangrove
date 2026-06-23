@@ -21,8 +21,9 @@ public sealed class CredentialProtector
         _key = key;
     }
 
-    /// <summary>Builds a 32-byte key from the env var (base64 or raw text), or a dev fallback.</summary>
-    public static CredentialProtector FromEnvironment(IConfiguration config, ILogger logger)
+    /// <summary>Builds a 32-byte key from the env var (base64 or raw text), or the persisted secret.</summary>
+    public static CredentialProtector FromConfiguration(
+        IConfiguration config, ServerSecrets secrets, ILogger logger)
     {
         var raw = config["MANGROVE_DATAPROTECTION_KEY"]
                   ?? Environment.GetEnvironmentVariable("MANGROVE_DATAPROTECTION_KEY");
@@ -30,10 +31,9 @@ public sealed class CredentialProtector
         byte[] key;
         if (string.IsNullOrWhiteSpace(raw))
         {
-            logger.LogWarning(
-                "MANGROVE_DATAPROTECTION_KEY is not set. Using a development key derived from the " +
-                "machine. SET A REAL KEY before storing credentials in production.");
-            key = SHA256.HashData(Encoding.UTF8.GetBytes("mangrove-dev-key|" + Environment.MachineName));
+            // No env override: use the persisted key (seeded from the historical machine-derived
+            // value, so credentials encrypted by older builds still decrypt).
+            return new CredentialProtector(Convert.FromBase64String(secrets.DataProtectionKeyBase64));
         }
         else if (TryDecodeBase64(raw, out var decoded) && decoded.Length == 32)
         {

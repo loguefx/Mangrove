@@ -10,13 +10,16 @@ namespace Mangrove.Server.Readers;
 public sealed class ReaderService
 {
     private readonly ArchiveReader _archive;
+    private readonly ArchiveCache _archiveCache;
     private readonly ImageFolderReader _folder;
     private readonly PdfPageReader _pdf;
     private readonly EpubService _epub;
 
-    public ReaderService(ArchiveReader archive, ImageFolderReader folder, PdfPageReader pdf, EpubService epub)
+    public ReaderService(
+        ArchiveReader archive, ArchiveCache archiveCache, ImageFolderReader folder, PdfPageReader pdf, EpubService epub)
     {
         _archive = archive;
+        _archiveCache = archiveCache;
         _folder = folder;
         _pdf = pdf;
         _epub = epub;
@@ -58,11 +61,8 @@ public sealed class ReaderService
         switch (FormatRegistry.FromFormat(format))
         {
             case MediaKind.ComicArchive:
-            {
-                await using var stream = await provider.OpenReadAsync(storagePath, ct);
-                using var buffered = await BufferAsync(stream, ct);
-                return _archive.ReadPage(buffered, index);
-            }
+                // Hot reader path: reuse the cached, already-downloaded archive across pages.
+                return await _archiveCache.ReadPageAsync(storagePath, provider, index, ct);
             case MediaKind.ImageFolder:
                 return await _folder.ReadPageAsync(storagePath, provider, index, ct);
             case MediaKind.Pdf:

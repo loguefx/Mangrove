@@ -106,9 +106,13 @@ public static class ServiceInstaller
         // Start it right away so the endpoint is immediately browsable after install.
         var start = Sc($"start {ServiceName}");
 
+        var dataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Mangrove");
         Console.WriteLine();
-        Console.WriteLine($"Installed '{ServiceName}'. Data lives next to the executable:");
+        Console.WriteLine($"Installed '{ServiceName}' from:");
         Console.WriteLine($"  {dir}");
+        Console.WriteLine("Your data (database, covers, settings) is kept separately so updates never erase it:");
+        Console.WriteLine($"  {dataDir}");
         if (start == 0)
         {
             Console.WriteLine();

@@ -8,17 +8,16 @@ public sealed class JwtOptions
     public TimeSpan AccessTokenLifetime { get; init; } = TimeSpan.FromMinutes(30);
     public TimeSpan RefreshTokenLifetime { get; init; } = TimeSpan.FromDays(30);
 
-    public static JwtOptions FromConfiguration(IConfiguration config, ILogger logger)
+    public static JwtOptions FromConfiguration(
+        IConfiguration config, Mangrove.Server.Security.ServerSecrets secrets, ILogger logger)
     {
         var secret = config["MANGROVE_JWT_SECRET"]
                      ?? Environment.GetEnvironmentVariable("MANGROVE_JWT_SECRET");
 
         if (string.IsNullOrWhiteSpace(secret))
         {
-            logger.LogWarning(
-                "MANGROVE_JWT_SECRET is not set. Generating an ephemeral dev secret; tokens will be " +
-                "invalidated on restart. SET A REAL SECRET in production.");
-            secret = Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(48));
+            // Fall back to the persisted secret so sessions survive restarts/updates.
+            secret = secrets.JwtSecret;
         }
         else if (secret.Length < 32)
         {

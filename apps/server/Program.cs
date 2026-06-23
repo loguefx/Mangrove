@@ -39,9 +39,10 @@ var port = builder.Configuration["MANGROVE_PORT"]
 builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
 
 // ---- Runtime config (spec §12) ----
-var paths = new ServerPaths(builder.Configuration);
-var protector = CredentialProtector.FromEnvironment(builder.Configuration, startupLogger);
-var jwtOptions = JwtOptions.FromConfiguration(builder.Configuration, startupLogger);
+var paths = new ServerPaths(builder.Configuration, startupLogger);
+var secrets = Mangrove.Server.Security.ServerSecrets.LoadOrCreate(paths.SecretsPath, startupLogger);
+var protector = CredentialProtector.FromConfiguration(builder.Configuration, secrets, startupLogger);
+var jwtOptions = JwtOptions.FromConfiguration(builder.Configuration, secrets, startupLogger);
 
 builder.Services.AddSingleton(paths);
 builder.Services.AddSingleton(protector);
@@ -51,12 +52,15 @@ builder.Services.AddSingleton<PasswordHasher>();
 builder.Services.AddSingleton<SmbConnectionPool>();
 builder.Services.AddSingleton<StorageProviderFactory>();
 builder.Services.AddSingleton<ArchiveReader>();
+builder.Services.AddSingleton<ArchiveCache>();
 builder.Services.AddSingleton<ImageFolderReader>();
 builder.Services.AddSingleton<PdfPageReader>();
 builder.Services.AddSingleton<EpubService>();
 builder.Services.AddSingleton<ComicInfoReader>();
 builder.Services.AddSingleton<ReaderService>();
 builder.Services.AddSingleton<FilenameParser>();
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<Mangrove.Server.Updates.UpdateService>();
 
 // Quiet EF's per-statement SQL logging — at Info it floods the console and badly slows large scans.
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);

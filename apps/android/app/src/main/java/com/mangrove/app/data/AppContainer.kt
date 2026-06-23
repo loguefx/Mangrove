@@ -2,6 +2,8 @@ package com.mangrove.app.data
 
 import android.content.Context
 import coil.ImageLoader
+import coil.disk.DiskCache
+import coil.memory.MemoryCache
 import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -201,7 +203,16 @@ class AppContainer(context: Context) {
 
         val imageLoader: ImageLoader = ImageLoader.Builder(appContext)
             .okHttpClient(apiClient)
-            .crossfade(true)
+            // No crossfade: prefetched pages should snap into place instantly.
+            .crossfade(false)
+            // Generous caches keep many pages resident for smooth back-and-forth reading.
+            .memoryCache { MemoryCache.Builder(appContext).maxSizePercent(0.30).build() }
+            .diskCache {
+                DiskCache.Builder()
+                    .directory(appContext.cacheDir.resolve("image_cache"))
+                    .maxSizeBytes(512L * 1024 * 1024)
+                    .build()
+            }
             .build()
 
         private fun retrofit(client: OkHttpClient): Retrofit = Retrofit.Builder()

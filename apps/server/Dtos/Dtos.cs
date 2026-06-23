@@ -2,6 +2,18 @@ using Mangrove.Server.Data;
 
 namespace Mangrove.Server.Dtos;
 
+// ---- Server updates (admin) ----
+public sealed record UpdateStatusDto(
+    string CurrentVersion,
+    string? LatestVersion,
+    bool UpdateAvailable,
+    bool CanSelfUpdate,
+    string? ReleaseNotes,
+    string? ReleaseUrl,
+    string? PublishedAt,
+    string? Error = null);
+public sealed record UpdateApplyResultDto(bool Started, string Message);
+
 // ---- Auth ----
 public sealed record RegisterFirstRequest(string Username, string? Email, string Password);
 public sealed record LoginRequest(string Username, string Password);

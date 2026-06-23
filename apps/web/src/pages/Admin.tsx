@@ -7,12 +7,13 @@ import {
   type ServerStatsDto,
   type SettingDto,
   type TaskLogDto,
+  type UpdateStatusDto,
 } from "../api";
 import { PageHeader } from "../components/SeriesGrid";
 import { Spinner } from "../components/Spinner";
 import { AddLibraryDialog } from "../components/AddLibraryDialog";
 
-const TABS = ["Users", "Activity", "Libraries", "Tasks", "Stats", "Settings"] as const;
+const TABS = ["Users", "Activity", "Libraries", "Tasks", "Stats", "Updates", "Settings"] as const;
 type Tab = (typeof TABS)[number];
 
 const AGE_TIERS = ["No restriction", "Everyone", "Everyone 10+", "Teen", "Mature 17+", "Adults Only 18+"];
@@ -44,6 +45,7 @@ export default function Admin() {
       {tab === "Libraries" && <LibrariesTab />}
       {tab === "Tasks" && <TasksTab />}
       {tab === "Stats" && <StatsTab />}
+      {tab === "Updates" && <UpdatesTab />}
       {tab === "Settings" && <SettingsTab />}
     </div>
   );
@@ -473,6 +475,160 @@ function StatsTab() {
           <div className="text-sm text-neutral-500">{label}</div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function UpdatesTab() {
+  const [status, setStatus] = useState<UpdateStatusDto | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const load = () => {
+    setLoading(true);
+    api
+      .updateStatus()
+      .then(setStatus)
+      .catch(() => setStatus(null))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(load, []);
+
+  const apply = async () => {
+    if (!window.confirm("Download and install the update now? The server will restart and be briefly unavailable.")) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await api.applyUpdate();
+      setMsg(res.message);
+      if (res.started) pollForRestart();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : "Update failed to start.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // After an update starts, the server goes down then comes back on a new version. Poll until the
+  // reported version changes (or we give up), then refresh the status card.
+  const pollForRestart = () => {
+    const before = status?.currentVersion;
+    let tries = 0;
+    const timer = setInterval(async () => {
+      tries++;
+      try {
+        const s = await api.updateStatus();
+        if (s.currentVersion !== before) {
+          clearInterval(timer);
+          setStatus(s);
+          setMsg(`Updated to v${s.currentVersion}.`);
+        }
+      } catch {
+        /* server still restarting */
+      }
+      if (tries > 60) clearInterval(timer);
+    }, 5000);
+  };
+
+  if (loading) return <Spinner />;
+  if (!status)
+    return (
+      <div className="space-y-3">
+        <p className="text-sm text-neutral-400">Couldn't load update status.</p>
+        <button onClick={load} className="rounded-xl bg-neutral-800 px-4 py-1.5 text-sm hover:bg-neutral-700">
+          Try again
+        </button>
+      </div>
+    );
+
+  const upToDate = !status.updateAvailable && !status.error;
+
+  return (
+    <div className="max-w-2xl space-y-5">
+      <div className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-5">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <div className="text-sm text-neutral-500">Installed version</div>
+            <div className="text-2xl font-semibold text-neutral-100">v{status.currentVersion}</div>
+          </div>
+          <div className="text-right">
+            {status.error ? (
+              <span className="rounded-full bg-amber-500/10 px-3 py-1 text-sm text-amber-400">Check failed</span>
+            ) : upToDate ? (
+              <span className="rounded-full bg-teal-mint/10 px-3 py-1 text-sm text-teal-mint">Up to date</span>
+            ) : (
+              <span className="rounded-full bg-amber-500/10 px-3 py-1 text-sm text-amber-400">
+                Update available
+              </span>
+            )}
+            {status.latestVersion && (
+              <div className="mt-1 text-xs text-neutral-500">Latest: v{status.latestVersion}</div>
+            )}
+          </div>
+        </div>
+
+        {status.error && <p className="mt-3 text-sm text-amber-400/80">{status.error}</p>}
+
+        {status.updateAvailable && (
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            {status.canSelfUpdate ? (
+              <button
+                onClick={apply}
+                disabled={busy}
+                className="rounded-xl bg-teal px-4 py-1.5 text-sm font-medium text-white hover:bg-teal/90 disabled:opacity-50"
+              >
+                {busy ? "Starting update…" : `Update to v${status.latestVersion}`}
+              </button>
+            ) : (
+              <p className="text-sm text-neutral-400">
+                Automatic install needs the Windows service. Download it from the{" "}
+                {status.releaseUrl ? (
+                  <a href={status.releaseUrl} target="_blank" rel="noreferrer" className="text-teal-mint underline">
+                    release page
+                  </a>
+                ) : (
+                  "release page"
+                )}
+                .
+              </p>
+            )}
+          </div>
+        )}
+
+        <div className="mt-4 flex items-center gap-3">
+          <button
+            onClick={load}
+            disabled={busy}
+            className="rounded-xl bg-neutral-800 px-4 py-1.5 text-sm hover:bg-neutral-700 disabled:opacity-50"
+          >
+            Check for updates
+          </button>
+          {status.releaseUrl && (
+            <a
+              href={status.releaseUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-sm text-neutral-400 hover:text-neutral-200"
+            >
+              View on GitHub
+            </a>
+          )}
+          {msg && <span className="text-sm text-teal-mint">{msg}</span>}
+        </div>
+      </div>
+
+      {status.releaseNotes && (
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-5">
+          <div className="mb-2 text-sm font-medium text-neutral-300">
+            Release notes{status.latestVersion ? ` — v${status.latestVersion}` : ""}
+          </div>
+          <pre className="max-h-80 overflow-auto whitespace-pre-wrap text-sm text-neutral-400">
+            {status.releaseNotes}
+          </pre>
+        </div>
+      )}
     </div>
   );
 }

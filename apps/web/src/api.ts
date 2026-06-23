@@ -19,6 +19,22 @@ export interface SetupStatus {
   appName: string;
 }
 
+export interface UpdateStatusDto {
+  currentVersion: string;
+  latestVersion?: string | null;
+  updateAvailable: boolean;
+  canSelfUpdate: boolean;
+  releaseNotes?: string | null;
+  releaseUrl?: string | null;
+  publishedAt?: string | null;
+  error?: string | null;
+}
+
+export interface UpdateApplyResultDto {
+  started: boolean;
+  message: string;
+}
+
 export interface LibraryPathDto {
   id: number;
   path: string;
@@ -512,6 +528,10 @@ export const api = {
   activity: () => request<ActivityDto[]>("/api/stats/activity"),
   scanAll: () =>
     request<{ libraries: number; status: string }>("/api/tasks/scan-all", { method: "POST" }),
+
+  // ---- Server updates (admin) ----
+  updateStatus: () => request<UpdateStatusDto>("/api/admin/update/status"),
+  applyUpdate: () => request<UpdateApplyResultDto>("/api/admin/update/apply", { method: "POST" }),
 };
 
 async function authedFetch(path: string): Promise<Response> {
