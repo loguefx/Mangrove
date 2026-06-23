@@ -38,7 +38,12 @@ interface MangroveApi {
         @Path("id") libraryId: Int,
         @Query("filter") filter: String? = null,
         @Query("sort") sort: String = "name",
+        @Query("genre") genre: String? = null,
+        @Query("status") status: String? = null,
     ): List<SeriesDto>
+
+    @GET("api/libraries/{id}/genres")
+    suspend fun libraryGenres(@Path("id") libraryId: Int): List<String>
 
     @GET("api/series/{id}")
     suspend fun seriesDetail(@Path("id") id: Int): SeriesDetailDto

@@ -28,6 +28,16 @@ class Prefs(context: Context) {
         get() = sp.getBoolean(KEY_WIFI_ONLY, false)
         set(value) = sp.edit().putBoolean(KEY_WIFI_ONLY, value).apply()
 
+    /** Library browse sort: name | added | updated | chapters. */
+    var librarySort: String
+        get() = sp.getString(KEY_LIB_SORT, "name") ?: "name"
+        set(value) = sp.edit().putString(KEY_LIB_SORT, value).apply()
+
+    /** Library reading-status filter: all | unread | reading | completed. */
+    var libraryStatus: String
+        get() = sp.getString(KEY_LIB_STATUS, "all") ?: "all"
+        set(value) = sp.edit().putString(KEY_LIB_STATUS, value).apply()
+
     fun loadCookies(): Set<String> = sp.getStringSet(KEY_COOKIES, emptySet()) ?: emptySet()
 
     fun saveCookies(values: Set<String>) {
@@ -45,5 +55,7 @@ class Prefs(context: Context) {
         const val KEY_COOKIES = "cookies"
         const val KEY_READER_DIR = "reader_dir"
         const val KEY_WIFI_ONLY = "wifi_only"
+        const val KEY_LIB_SORT = "library_sort"
+        const val KEY_LIB_STATUS = "library_status"
     }
 }

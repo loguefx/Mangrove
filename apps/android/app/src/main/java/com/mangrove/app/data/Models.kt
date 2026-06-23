@@ -32,6 +32,7 @@ data class SeriesDto(
     val hasCover: Boolean = false,
     val volumeCount: Int = 0,
     val chapterCount: Int = 0,
+    val readChapters: Int = 0,
 )
 
 @Serializable

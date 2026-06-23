@@ -1,6 +1,8 @@
 package com.mangrove.app.ui
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -10,13 +12,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.AssistChipDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -34,6 +43,20 @@ import com.mangrove.app.data.AppContainer
 import com.mangrove.app.data.SeriesDto
 import kotlinx.coroutines.launch
 
+private val SORT_OPTIONS = listOf(
+    "name" to "Name",
+    "added" to "Recently added",
+    "updated" to "Recently updated",
+    "chapters" to "Most chapters",
+)
+
+private val STATUS_OPTIONS = listOf(
+    "all" to "All",
+    "unread" to "Unread",
+    "reading" to "In progress",
+    "completed" to "Completed",
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LibraryScreen(container: AppContainer, nav: NavController, libraryId: Int) {
@@ -43,22 +66,41 @@ fun LibraryScreen(container: AppContainer, nav: NavController, libraryId: Int) {
     var firstLoadDone by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    suspend fun fetch() {
-        runCatching { container.libraries() }.getOrNull()
-            ?.firstOrNull { it.id == libraryId }?.let { title = it.name }
-        series = runCatching { container.series(libraryId, null) }.getOrDefault(emptyList())
+    var sort by remember { mutableStateOf(container.prefs.librarySort) }
+    var status by remember { mutableStateOf(container.prefs.libraryStatus) }
+    var genre by remember { mutableStateOf("") }
+    var genres by remember { mutableStateOf<List<String>>(emptyList()) }
+
+    suspend fun fetchSeries() {
+        series = runCatching {
+            container.series(
+                libraryId,
+                null,
+                sort,
+                genre.ifEmpty { null },
+                status.takeIf { it != "all" },
+            )
+        }.getOrDefault(emptyList())
     }
 
     LaunchedEffect(libraryId) {
-        fetch()
+        runCatching { container.libraries() }.getOrNull()
+            ?.firstOrNull { it.id == libraryId }?.let { title = it.name }
+        genres = runCatching { container.libraryGenres(libraryId) }.getOrDefault(emptyList())
+    }
+
+    // Refetch whenever the library or any filter changes.
+    LaunchedEffect(libraryId, sort, status, genre) {
+        series = null
+        fetchSeries()
         firstLoadDone = true
     }
-    // Auto-refresh when returning to this library so newly scanned series appear.
+
     LifecycleResumeRefresh {
-        if (firstLoadDone) scope.launch { refreshing = true; fetch(); refreshing = false }
+        if (firstLoadDone) scope.launch { refreshing = true; fetchSeries(); refreshing = false }
     }
     AutoRefresh {
-        if (firstLoadDone) scope.launch { fetch() }
+        if (firstLoadDone) scope.launch { fetchSeries() }
     }
 
     Column(Modifier.fillMaxSize()) {
@@ -72,15 +114,60 @@ fun LibraryScreen(container: AppContainer, nav: NavController, libraryId: Int) {
             Text(title, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
         }
 
+        // Browse controls: status filter chips + sort/genre pickers.
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                .padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            STATUS_OPTIONS.forEach { (value, label) ->
+                FilterChip(
+                    selected = status == value,
+                    onClick = {
+                        status = value
+                        container.prefs.libraryStatus = value
+                    },
+                    label = { Text(label) },
+                )
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            DropdownPicker(
+                label = "Sort",
+                options = SORT_OPTIONS,
+                selected = sort,
+                onSelect = {
+                    sort = it
+                    container.prefs.librarySort = it
+                },
+            )
+            if (genres.isNotEmpty()) {
+                DropdownPicker(
+                    label = "Genre",
+                    options = listOf("" to "All genres") + genres.map { it to it },
+                    selected = genre,
+                    onSelect = { genre = it },
+                )
+            }
+        }
+
         PullToRefreshBox(
             isRefreshing = refreshing,
-            onRefresh = { scope.launch { refreshing = true; fetch(); refreshing = false } },
+            onRefresh = { scope.launch { refreshing = true; fetchSeries(); refreshing = false } },
             modifier = Modifier.fillMaxSize(),
         ) {
             val list = series
             when {
                 list == null -> LoadingBox()
-                list.isEmpty() -> MessageBox("No series in this library yet.")
+                list.isEmpty() -> MessageBox(
+                    if (status != "all" || genre.isNotEmpty()) "No series match your filters."
+                    else "No series in this library yet.",
+                )
                 else -> LazyVerticalGrid(
                     columns = GridCells.Adaptive(minSize = 112.dp),
                     contentPadding = PaddingValues(12.dp),
@@ -95,9 +182,45 @@ fun LibraryScreen(container: AppContainer, nav: NavController, libraryId: Int) {
                             title = s.name,
                             subtitle = "${s.chapterCount} ch",
                             onClick = { nav.navigate("series/${s.id}") },
+                            readChapters = s.readChapters,
+                            chapterCount = s.chapterCount,
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+/** A compact label + dropdown menu used for the sort and genre pickers. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DropdownPicker(
+    label: String,
+    options: List<Pair<String, String>>,
+    selected: String,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val current = options.firstOrNull { it.first == selected }?.second ?: label
+    Box {
+        AssistChip(
+            onClick = { expanded = true },
+            label = { Text("$label: $current") },
+            trailingIcon = {
+                Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
+            },
+            colors = AssistChipDefaults.assistChipColors(),
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { (value, text) ->
+                DropdownMenuItem(
+                    text = { Text(text) },
+                    onClick = {
+                        expanded = false
+                        onSelect(value)
+                    },
+                )
             }
         }
     }

@@ -106,7 +106,14 @@ class AppContainer(context: Context) {
 
     suspend fun dashboard() = requireBackend().api.dashboard()
     suspend fun libraries() = requireBackend().api.libraries()
-    suspend fun series(libraryId: Int, filter: String?) = requireBackend().api.series(libraryId, filter)
+    suspend fun series(
+        libraryId: Int,
+        filter: String?,
+        sort: String = "name",
+        genre: String? = null,
+        status: String? = null,
+    ) = requireBackend().api.series(libraryId, filter, sort, genre, status)
+    suspend fun libraryGenres(libraryId: Int) = requireBackend().api.libraryGenres(libraryId)
     suspend fun seriesDetail(id: Int) = requireBackend().api.seriesDetail(id)
 
     suspend fun wantToRead() = requireBackend().api.wantToRead()

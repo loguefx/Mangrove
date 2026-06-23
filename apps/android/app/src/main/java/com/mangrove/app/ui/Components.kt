@@ -4,9 +4,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -18,12 +22,15 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.repeatOnLifecycle
@@ -65,7 +72,13 @@ fun CoverCard(
     subtitle: String? = null,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    readChapters: Int = 0,
+    chapterCount: Int = 0,
 ) {
+    val read = readChapters.coerceAtMost(chapterCount)
+    val completed = chapterCount > 0 && read >= chapterCount
+    val inProgress = read > 0 && !completed
+    val progress = if (chapterCount > 0) read.toFloat() / chapterCount else 0f
     androidx.compose.foundation.layout.Column(
         modifier = modifier
             .clip(RoundedCornerShape(14.dp))
@@ -84,6 +97,37 @@ fun CoverCard(
                 NetworkImage(container, coverPath, title, Modifier.fillMaxSize())
             } else {
                 Text("No cover", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+
+            if (completed) {
+                Box(
+                    Modifier
+                        .align(Alignment.TopStart)
+                        .padding(6.dp)
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("✓", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            if (inProgress) {
+                Box(
+                    Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .height(4.dp)
+                        .background(Color.Black.copy(alpha = 0.45f)),
+                ) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth(progress)
+                            .fillMaxHeight()
+                            .background(MaterialTheme.colorScheme.secondary),
+                    )
+                }
             }
         }
         Text(
