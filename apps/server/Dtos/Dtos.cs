@@ -60,7 +60,7 @@ public sealed record StorageTestEntry(string Name, bool IsDirectory, long Size);
 public sealed record StorageTestResponse(bool Success, string Message, IReadOnlyList<StorageTestEntry> Entries);
 
 // ---- Browse ----
-public sealed record SeriesDto(int Id, int LibraryId, string Name, string? Summary, bool HasCover, int VolumeCount, int ChapterCount);
+public sealed record SeriesDto(int Id, int LibraryId, string Name, string? Summary, bool HasCover, int VolumeCount, int ChapterCount, int ReadChapters = 0);
 public sealed record SeriesDetailDto(
     int Id, int LibraryId, string Name, string? Summary, bool HasCover, IReadOnlyList<VolumeDto> Volumes,
     string? Genres = null, string? Tags = null, string? Publisher = null, string? AgeRating = null,

@@ -160,7 +160,12 @@ public sealed class LibrariesController : ControllerBase
 
     [HttpGet("{id:int}/series")]
     public async Task<ActionResult<IEnumerable<SeriesDto>>> Series(
-        int id, [FromQuery] string? filter, [FromQuery] string sort = "name", CancellationToken ct = default)
+        int id,
+        [FromQuery] string? filter,
+        [FromQuery] string sort = "name",
+        [FromQuery] string? genre = null,
+        [FromQuery] string? status = null,
+        CancellationToken ct = default)
     {
         var userId = User.GetUserId() ?? 0;
         var isAdmin = User.IsAdmin();
@@ -171,10 +176,14 @@ public sealed class LibrariesController : ControllerBase
         var query = _access.FilterSeries(_db.Series.Where(s => s.LibraryId == id), libIds, restriction);
         if (!string.IsNullOrWhiteSpace(filter))
             query = query.Where(s => s.Name.Contains(filter));
+        if (!string.IsNullOrWhiteSpace(genre))
+            query = query.Where(s => s.Genres != null && s.Genres.Contains(genre));
 
         query = sort.ToLowerInvariant() switch
         {
-            "recent" => query.OrderByDescending(s => s.UpdatedAt),
+            "recent" or "updated" => query.OrderByDescending(s => s.UpdatedAt),
+            "added" => query.OrderByDescending(s => s.CreatedAt),
+            "chapters" => query.OrderByDescending(s => s.Volumes.SelectMany(v => v.Chapters).Count()),
             _ => query.OrderBy(s => s.SortName),
         };
 
@@ -182,8 +191,43 @@ public sealed class LibrariesController : ControllerBase
             .Select(s => new SeriesDto(
                 s.Id, s.LibraryId, s.Name, s.Summary, s.CoverPath != null,
                 s.Volumes.Count,
-                s.Volumes.SelectMany(v => v.Chapters).Count()))
+                s.Volumes.SelectMany(v => v.Chapters).Count(),
+                s.Volumes.SelectMany(v => v.Chapters)
+                    .Count(c => c.ReadingProgress.Any(rp => rp.UserId == userId && rp.IsRead))))
             .ToListAsync(ct);
+
+        // "status" is applied in memory because it depends on the per-user read count above.
+        series = status?.ToLowerInvariant() switch
+        {
+            "unread" => series.Where(s => s.ReadChapters == 0).ToList(),
+            "reading" => series.Where(s => s.ReadChapters > 0 && s.ReadChapters < s.ChapterCount).ToList(),
+            "completed" => series.Where(s => s.ChapterCount > 0 && s.ReadChapters >= s.ChapterCount).ToList(),
+            _ => series,
+        };
         return Ok(series);
+    }
+
+    /// <summary>Distinct genres present in a library, for the browse/filter dropdown.</summary>
+    [HttpGet("{id:int}/genres")]
+    public async Task<ActionResult<IEnumerable<string>>> Genres(int id, CancellationToken ct = default)
+    {
+        var userId = User.GetUserId() ?? 0;
+        var isAdmin = User.IsAdmin();
+        var libIds = await _access.AccessibleLibraryIdsAsync(userId, isAdmin, ct);
+        if (!libIds.Contains(id)) return Forbid();
+        var restriction = await _access.GetRestrictionAsync(userId, isAdmin, ct);
+
+        var raw = await _access
+            .FilterSeries(_db.Series.Where(s => s.LibraryId == id), libIds, restriction)
+            .Where(s => s.Genres != null && s.Genres != "")
+            .Select(s => s.Genres!)
+            .ToListAsync(ct);
+
+        var genres = raw
+            .SelectMany(g => g.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(g => g, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return Ok(genres);
     }
 }

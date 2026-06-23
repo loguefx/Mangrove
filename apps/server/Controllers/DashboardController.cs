@@ -49,7 +49,7 @@ public sealed class DashboardController : ControllerBase
             .Take(12)
             .Select(s => new SeriesDto(
                 s.Id, s.LibraryId, s.Name, s.Summary, s.CoverPath != null,
-                s.Volumes.Count, s.Volumes.SelectMany(v => v.Chapters).Count()))
+                s.Volumes.Count, s.Volumes.SelectMany(v => v.Chapters).Count(), 0))
             .ToListAsync(ct);
 
         return Ok(new DashboardDto(continueReading, recentlyAdded));

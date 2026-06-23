@@ -62,6 +62,7 @@ export interface SeriesDto {
   hasCover: boolean;
   volumeCount: number;
   chapterCount: number;
+  readChapters: number;
 }
 
 export interface FavoriteUnread {
@@ -392,10 +393,21 @@ export const api = {
       `/api/libraries/${id}/scan-status`
     ),
 
-  series: (libraryId: number, filter?: string) =>
-    request<SeriesDto[]>(
-      `/api/libraries/${libraryId}/series${filter ? `?filter=${encodeURIComponent(filter)}` : ""}`
-    ),
+  series: (
+    libraryId: number,
+    opts?: { filter?: string; sort?: string; genre?: string; status?: string }
+  ) => {
+    const qs = new URLSearchParams();
+    if (opts?.filter) qs.set("filter", opts.filter);
+    if (opts?.sort) qs.set("sort", opts.sort);
+    if (opts?.genre) qs.set("genre", opts.genre);
+    if (opts?.status) qs.set("status", opts.status);
+    const q = qs.toString();
+    return request<SeriesDto[]>(`/api/libraries/${libraryId}/series${q ? `?${q}` : ""}`);
+  },
+
+  libraryGenres: (libraryId: number) =>
+    request<string[]>(`/api/libraries/${libraryId}/genres`),
 
   seriesDetail: (id: number) => request<SeriesDetailDto>(`/api/series/${id}`),
 

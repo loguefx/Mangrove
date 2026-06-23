@@ -5,7 +5,8 @@ import { useAuth } from "../auth";
 import { MangroveWordmark } from "../components/Brand";
 import { Spinner } from "../components/Spinner";
 import { AddLibraryDialog } from "../components/AddLibraryDialog";
-import { SeriesGrid } from "../components/SeriesGrid";
+import { SeriesGrid, SeriesGridSkeleton } from "../components/SeriesGrid";
+import { usePreferences } from "../preferences";
 
 type View = "home" | number;
 
@@ -28,10 +29,27 @@ export default function Dashboard() {
   const [wantToRead, setWantToRead] = useState<SeriesDto[]>([]);
   const [catchUp, setCatchUp] = useState<FavoriteUnread[]>([]);
   const [loading, setLoading] = useState(true);
+  const [seriesLoading, setSeriesLoading] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   const [search, setSearch] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+
+  // Sort + read-status are per-user prefs (synced across devices); genre is per-library local state.
+  const { getPref, setPref } = usePreferences();
+  const sort = getPref("library.sort", "name");
+  const setSort = (v: string) => setPref("library.sort", v);
+  const status = getPref("library.status", "all");
+  const setStatus = (v: string) => setPref("library.status", v);
+  const [genre, setGenre] = useState("");
+  const [genres, setGenres] = useState<string[]>([]);
+
+  const seriesOpts = () => ({
+    filter: search || undefined,
+    sort,
+    genre: genre || undefined,
+    status: status !== "all" ? status : undefined,
+  });
 
   const loadLibraries = async () => {
     const libs = await api.libraries();
@@ -55,10 +73,12 @@ export default function Dashboard() {
     viewRef.current = view;
   }, [view]);
 
-  const searchRef = useRef(search);
+  // Mirror the current query params into a ref so the auto-refresh interval and scan loop always
+  // read the latest values without resubscribing.
+  const optsRef = useRef(seriesOpts());
   useEffect(() => {
-    searchRef.current = search;
-  }, [search]);
+    optsRef.current = seriesOpts();
+  });
 
   // Auto-refresh: periodically pull fresh content so newly-scanned chapters/series appear without a
   // manual refresh. Pauses while the tab is hidden or a manual scan is already polling.
@@ -70,7 +90,7 @@ export default function Dashboard() {
       loadHome();
       const v = viewRef.current;
       if (typeof v === "number") {
-        api.series(v, searchRef.current || undefined).then(setSeries).catch(() => {});
+        api.series(v, optsRef.current).then(setSeries).catch(() => {});
       }
     }, REFRESH_MS);
     return () => clearInterval(id);
@@ -109,8 +129,9 @@ export default function Dashboard() {
     }
     const lib = view;
     let cancelled = false;
+    setSeriesLoading(true);
     api
-      .series(lib, search || undefined)
+      .series(lib, seriesOpts())
       .then((s) => {
         if (cancelled) return;
         setSeries(s);
@@ -124,11 +145,32 @@ export default function Dashboard() {
       })
       .catch(() => {
         if (!cancelled) setSeries([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSeriesLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [view, search]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, search, sort, genre, status]);
+
+  // Load the genre list (and reset the genre filter) when switching libraries.
+  useEffect(() => {
+    if (typeof view !== "number") {
+      setGenres([]);
+      return;
+    }
+    setGenre("");
+    let cancelled = false;
+    api
+      .libraryGenres(view)
+      .then((g) => !cancelled && setGenres(g))
+      .catch(() => !cancelled && setGenres([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [view]);
 
   const scan = async (libraryId: number) => {
     setScanning(true);
@@ -141,7 +183,7 @@ export default function Dashboard() {
         const status = await api.scanStatus(libraryId).catch(() => null);
         await loadLibraries();
         if (viewRef.current === libraryId) {
-          const s = await api.series(libraryId, search || undefined).catch(() => []);
+          const s = await api.series(libraryId, optsRef.current).catch(() => []);
           setSeries(s);
         }
         if (!status || status.state === "idle") break;
@@ -256,14 +298,53 @@ export default function Dashboard() {
       <main className="flex-1 p-6">
         <header className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-xl font-semibold">{view === "home" ? "Home" : activeLib?.name ?? "Library"}</h1>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {view !== "home" && (
-              <input
-                placeholder="Filter series…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-sm outline-none focus:border-teal-mint"
-              />
+              <>
+                <input
+                  placeholder="Filter series…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-sm outline-none focus:border-teal-mint"
+                />
+                <select
+                  value={sort}
+                  onChange={(e) => setSort(e.target.value)}
+                  title="Sort by"
+                  className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-sm text-neutral-200 outline-none focus:border-teal-mint"
+                >
+                  <option value="name">Name (A–Z)</option>
+                  <option value="added">Recently added</option>
+                  <option value="updated">Recently updated</option>
+                  <option value="chapters">Most chapters</option>
+                </select>
+                <select
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value)}
+                  title="Reading status"
+                  className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-sm text-neutral-200 outline-none focus:border-teal-mint"
+                >
+                  <option value="all">All</option>
+                  <option value="unread">Unread</option>
+                  <option value="reading">In progress</option>
+                  <option value="completed">Completed</option>
+                </select>
+                {genres.length > 0 && (
+                  <select
+                    value={genre}
+                    onChange={(e) => setGenre(e.target.value)}
+                    title="Genre"
+                    className="rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-1.5 text-sm text-neutral-200 outline-none focus:border-teal-mint"
+                  >
+                    <option value="">All genres</option>
+                    {genres.map((g) => (
+                      <option key={g} value={g}>
+                        {g}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </>
             )}
             <Link
               to="/search"
@@ -297,11 +378,15 @@ export default function Dashboard() {
             onOpenLibrary={setView}
             onAddLibrary={() => setShowAdd(true)}
           />
+        ) : seriesLoading && series.length === 0 ? (
+          <SeriesGridSkeleton />
         ) : series.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-neutral-800 p-12 text-center text-neutral-500">
             {scanning
               ? "Scanning…"
-              : `No series found. ${isAdmin ? "Run a scan to populate this library." : ""}`}
+              : search || genre || status !== "all"
+                ? "No series match your filters."
+                : `No series found. ${isAdmin ? "Run a scan to populate this library." : ""}`}
           </div>
         ) : (
           <SeriesGrid series={series} />
