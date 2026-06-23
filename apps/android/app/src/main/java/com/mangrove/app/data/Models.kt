@@ -126,6 +126,8 @@ data class ChapterManifestDto(
     val readingDirection: String = "ltr",
     val format: String = "",
     val mediaType: String = "image",
+    val prevChapterId: Int? = null,
+    val nextChapterId: Int? = null,
 )
 
 @Serializable
@@ -136,6 +138,7 @@ data class ProgressDto(
     val chapterId: Int = 0,
     val page: Int = 0,
     val isRead: Boolean = false,
+    val updatedAt: String? = null,
 )
 
 // ---- Admin ----

@@ -44,7 +44,19 @@ public sealed class ChaptersController : ControllerBase
         var direction = chapter.Volume.Series.Library.Type == LibraryType.Manga ? "rtl" : "ltr";
         var kind = FormatRegistry.FromFormat(chapter.FileFormat);
         var mediaType = kind == MediaKind.Epub ? "epub" : "image";
-        return Ok(new ChapterManifestDto(chapter.Id, chapter.PageCount, direction, chapter.FileFormat, mediaType));
+
+        // Sibling chapters in reading order, so the reader can preload the next chapter and offer
+        // next/previous navigation. Ordered by volume then chapter number (Id as a stable tiebreak).
+        var ordered = await _db.Chapters
+            .Where(c => c.Volume.SeriesId == chapter.Volume.SeriesId)
+            .OrderBy(c => c.Volume.Number).ThenBy(c => c.Number).ThenBy(c => c.Id)
+            .Select(c => c.Id)
+            .ToListAsync(ct);
+        var idx = ordered.IndexOf(id);
+        int? prevId = idx > 0 ? ordered[idx - 1] : null;
+        int? nextId = idx >= 0 && idx < ordered.Count - 1 ? ordered[idx + 1] : null;
+
+        return Ok(new ChapterManifestDto(chapter.Id, chapter.PageCount, direction, chapter.FileFormat, mediaType, prevId, nextId));
     }
 
     [HttpGet("{id:int}/cover")]

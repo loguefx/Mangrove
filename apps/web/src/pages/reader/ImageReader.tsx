@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, fetchImageObjectUrl, type ChapterManifestDto } from "../../api";
+import { api, fetchImageObjectUrl, prefetchAuthed, type ChapterManifestDto } from "../../api";
 import { Spinner } from "../../components/Spinner";
 import { usePreferences } from "../../preferences";
 
@@ -66,6 +66,13 @@ export default function ImageReader({
 }) {
   const { mode, setMode, fit, setFit, dir, setDir } = useReaderPrefs();
   const [showSettings, setShowSettings] = useState(false);
+  const [chrome, setChrome] = useState(true);
+  const toggleChrome = useCallback(() => {
+    setChrome((c) => {
+      if (c) setShowSettings(false); // closing chrome also closes the settings popover
+      return !c;
+    });
+  }, []);
   const [zoom, setZoom] = useState(1);
   // "auto" follows the series' own direction; an explicit ltr/rtl overrides it everywhere.
   const rtl = dir === "auto" ? manifest.readingDirection === "rtl" : dir === "rtl";
@@ -85,12 +92,22 @@ export default function ImageReader({
         setDir={setDir}
         showSettings={showSettings}
         setShowSettings={setShowSettings}
+        chrome={chrome}
         zoom={zoom}
         setZoom={setZoom}
         onExit={onExit}
         label="Webtoon"
       >
-        <Webtoon id={id} count={count} startPage={startPage} loadPage={loadPage} fit={fit} zoom={zoom} />
+        <Webtoon
+          id={id}
+          count={count}
+          startPage={startPage}
+          loadPage={loadPage}
+          fit={fit}
+          zoom={zoom}
+          onToggleChrome={toggleChrome}
+          nextChapterId={manifest.nextChapterId ?? null}
+        />
       </ReaderChrome>
     );
   }
@@ -106,6 +123,8 @@ export default function ImageReader({
       setDir={setDir}
       showSettings={showSettings}
       setShowSettings={setShowSettings}
+      chrome={chrome}
+      toggleChrome={toggleChrome}
       zoom={zoom}
       setZoom={setZoom}
       rtl={rtl}
@@ -272,6 +291,8 @@ function Paged(props: {
   setDir: (d: Dir) => void;
   showSettings: boolean;
   setShowSettings: (b: boolean) => void;
+  chrome: boolean;
+  toggleChrome: () => void;
   zoom: number;
   setZoom: (z: number) => void;
   rtl: boolean;
@@ -279,7 +300,7 @@ function Paged(props: {
   loadPage: (n: number) => Promise<string | null>;
   onExit: () => void;
 }) {
-  const { manifest, mode, zoom, setZoom, rtl, startPage, loadPage, onExit } = props;
+  const { manifest, mode, toggleChrome, zoom, setZoom, rtl, startPage, loadPage, onExit } = props;
   const count = manifest.pageCount;
   const double = mode === "double";
   const spreads = useMemo(() => buildSpreads(count, double), [count, double]);
@@ -312,6 +333,21 @@ function Paged(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spreadIdx, double, loadPage, manifest.id]);
 
+  // Cross-chapter preload: as the reader nears the end, warm the next chapter's manifest and first
+  // pages. The slowest moment in reading is opening a new chapter over the NAS — this hides it.
+  const prefetchedNext = useRef(false);
+  useEffect(() => {
+    prefetchedNext.current = false;
+  }, [manifest.id]);
+  useEffect(() => {
+    const nextId = manifest.nextChapterId;
+    if (!nextId || prefetchedNext.current) return;
+    if (spreadIdx < spreads.length - 2) return; // only once we're close to the end
+    prefetchedNext.current = true;
+    void api.manifest(nextId).catch(() => undefined);
+    for (let p = 0; p < 3; p++) void prefetchAuthed(`/api/chapters/${nextId}/pages/${p}`);
+  }, [spreadIdx, spreads.length, manifest.nextChapterId]);
+
   const goNext = useCallback(
     () => setSpreadIdx((i) => (i < spreads.length - 1 ? i + 1 : i)),
     [spreads.length]
@@ -332,10 +368,12 @@ function Paged(props: {
   }, [rtl, goNext, goPrev, onExit, zoom, setZoom]);
 
   const onClickViewport = (e: React.MouseEvent) => {
+    const w = e.currentTarget.clientWidth;
     const x = e.clientX - e.currentTarget.getBoundingClientRect().left;
-    const rightHalf = x > e.currentTarget.clientWidth / 2;
-    if (rightHalf) (rtl ? goPrev : goNext)();
-    else (rtl ? goNext : goPrev)();
+    // Three zones: outer thirds turn pages, the center third toggles the chrome/overlay.
+    if (x < w / 3) (rtl ? goNext : goPrev)();
+    else if (x > (2 * w) / 3) (rtl ? goPrev : goNext)();
+    else toggleChrome();
   };
 
   // In double-page RTL the lower-index page sits on the right.
@@ -352,6 +390,7 @@ function Paged(props: {
       setDir={props.setDir}
       showSettings={props.showSettings}
       setShowSettings={props.setShowSettings}
+      chrome={props.chrome}
       zoom={zoom}
       setZoom={setZoom}
       onExit={onExit}
@@ -421,6 +460,8 @@ function Webtoon({
   loadPage,
   fit,
   zoom,
+  onToggleChrome,
+  nextChapterId,
 }: {
   id: number;
   count: number;
@@ -428,10 +469,13 @@ function Webtoon({
   loadPage: (n: number) => Promise<string | null>;
   fit: Fit;
   zoom: number;
+  onToggleChrome: () => void;
+  nextChapterId: number | null;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [loaded, setLoaded] = useState<Map<number, string>>(new Map());
   const observer = useRef<IntersectionObserver | null>(null);
+  const prefetchedNext = useRef(false);
 
   useEffect(() => {
     observer.current = new IntersectionObserver(
@@ -439,6 +483,12 @@ function Webtoon({
         entries.forEach((entry) => {
           if (!entry.isIntersecting) return;
           const n = Number((entry.target as HTMLElement).dataset.page);
+          // Warm the next chapter once its tail comes into view.
+          if (nextChapterId && !prefetchedNext.current && n >= count - 2) {
+            prefetchedNext.current = true;
+            void api.manifest(nextChapterId).catch(() => undefined);
+            for (let p = 0; p < 3; p++) void prefetchAuthed(`/api/chapters/${nextChapterId}/pages/${p}`);
+          }
           if (loaded.has(n)) return;
           void loadPage(n).then((url) => {
             if (url) setLoaded((m) => new Map(m).set(n, url));
@@ -449,7 +499,7 @@ function Webtoon({
     );
     return () => observer.current?.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadPage]);
+  }, [loadPage, nextChapterId, count]);
 
   // Persist progress (debounced) based on which page is centered.
   useEffect(() => {
@@ -477,7 +527,11 @@ function Webtoon({
     fit === "original" ? { maxWidth: "none" } : { width: "100%", maxWidth: `${48 * zoom}rem` };
 
   return (
-    <div ref={containerRef} className="h-full overflow-auto bg-black">
+    <div
+      ref={containerRef}
+      className="h-full overflow-auto bg-black"
+      onClick={onToggleChrome}
+    >
       {Array.from({ length: count }, (_, n) => (
         <div
           key={n}
@@ -517,6 +571,7 @@ function ReaderChrome({
   setDir,
   showSettings,
   setShowSettings,
+  chrome,
   zoom,
   setZoom,
   onExit,
@@ -533,6 +588,7 @@ function ReaderChrome({
   setDir: (d: Dir) => void;
   showSettings: boolean;
   setShowSettings: (b: boolean) => void;
+  chrome: boolean;
   zoom: number;
   setZoom: (z: number) => void;
   onExit: () => void;
@@ -543,6 +599,7 @@ function ReaderChrome({
   void manifest;
   return (
     <div className="relative flex h-screen flex-col bg-black">
+      {chrome && (
       <header className="absolute inset-x-0 top-0 z-10 flex items-center justify-between bg-gradient-to-b from-black/80 to-transparent px-4 py-3 text-sm text-neutral-200">
         <button onClick={onExit} className="hover:text-teal-mint">
           ← Back
@@ -552,8 +609,9 @@ function ReaderChrome({
           ⚙ Settings
         </button>
       </header>
+      )}
 
-      {showSettings && (
+      {chrome && showSettings && (
         <div className="absolute right-4 top-12 z-20 w-56 rounded-xl border border-neutral-700 bg-neutral-900/95 p-4 text-sm text-neutral-200 shadow-xl">
           <label className="mb-1 block text-xs uppercase tracking-wide text-neutral-400">Layout</label>
           <select
@@ -594,6 +652,7 @@ function ReaderChrome({
       <div className="flex flex-1 overflow-hidden">{children}</div>
 
       {/* Floating zoom controls (work in every layout). */}
+      {chrome && (
       <div className="absolute bottom-20 right-4 z-10 flex flex-col items-stretch overflow-hidden rounded-xl border border-neutral-700 bg-neutral-900/90 text-neutral-200 shadow-xl">
         <button
           onClick={() => setZoom(clampZoom(zoom + ZOOM_STEP))}
@@ -617,8 +676,9 @@ function ReaderChrome({
           −
         </button>
       </div>
+      )}
 
-      {footer && (
+      {chrome && footer && (
         <footer className="absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/80 to-transparent px-4 py-3">
           {footer}
         </footer>

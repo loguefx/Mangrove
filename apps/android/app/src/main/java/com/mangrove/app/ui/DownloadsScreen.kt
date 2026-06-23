@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -42,6 +43,7 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.mangrove.app.data.AppContainer
 import com.mangrove.app.data.DownloadMeta
+import com.mangrove.app.data.DownloadState
 
 @Composable
 fun DownloadsScreen(container: AppContainer, nav: NavController) {
@@ -55,6 +57,13 @@ fun DownloadsScreen(container: AppContainer, nav: NavController) {
     // (no signed-in user) so there's still a way back. As a bottom-nav tab it shows no back arrow.
     val showBack = selectedId != null || container.user == null
 
+    // In-flight downloads (queued/running), surfaced at the top so progress is always visible.
+    val active = remember(progress) {
+        progress.values
+            .filter { it.state == DownloadState.Queued || it.state == DownloadState.Running }
+            .sortedByDescending { it.state == DownloadState.Running }
+    }
+
     Column(Modifier.fillMaxSize()) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
@@ -67,12 +76,72 @@ fun DownloadsScreen(container: AppContainer, nav: NavController) {
             } else {
                 androidx.compose.foundation.layout.Spacer(Modifier.width(8.dp))
             }
-            Text(selected?.name ?: "Downloads", fontSize = 24.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Column(Modifier.weight(1f)) {
+                Text(selected?.name ?: "Downloads", fontSize = 24.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                val sizeBytes = remember(progress, refreshKey, selectedId) {
+                    if (selected != null) container.downloadStore.seriesBytes(selected.seriesId)
+                    else container.downloadStore.totalBytes()
+                }
+                val subtitle = if (selected != null) {
+                    "${selected.chapters.size} ch · ${formatBytes(sizeBytes)}"
+                } else if (series.isNotEmpty()) {
+                    "${series.size} series · ${formatBytes(sizeBytes)}"
+                } else {
+                    null
+                }
+                if (subtitle != null) {
+                    Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (selected != null) {
+                IconButton(onClick = {
+                    container.downloadStore.deleteSeries(selected.seriesId)
+                    refreshKey++
+                    selectedId = null
+                }) {
+                    Icon(Icons.Filled.Delete, contentDescription = "Remove all downloads for this series")
+                }
+            }
+        }
+
+        // Active downloads progress (only on the top-level list).
+        if (selected == null && active.isNotEmpty()) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
+                Text(
+                    "Downloading",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                active.take(6).forEach { p ->
+                    val meta = container.downloadStore.readMeta(p.chapterId)
+                    val name = meta?.seriesName ?: "Chapter ${p.chapterId}"
+                    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                        Text(
+                            if (p.state == DownloadState.Queued) "$name · queued"
+                            else "$name · ${p.done}/${p.total}",
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (p.total > 0) {
+                            LinearProgressIndicator(
+                                progress = { p.done.toFloat() / p.total.toFloat() },
+                                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                            )
+                        } else {
+                            LinearProgressIndicator(Modifier.fillMaxWidth().padding(top = 2.dp))
+                        }
+                    }
+                }
+                HorizontalDivider(color = MaterialTheme.colorScheme.surfaceVariant, modifier = Modifier.padding(top = 6.dp))
+            }
         }
 
         when {
-            series.isEmpty() ->
+            series.isEmpty() && active.isEmpty() ->
                 MessageBox("No downloads yet. Open a series and tap the download icon to save chapters for offline reading.")
+
+            series.isEmpty() -> androidx.compose.foundation.layout.Spacer(Modifier.fillMaxSize())
 
             selected == null -> LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 112.dp),
@@ -164,3 +233,10 @@ private fun DownloadedChapterRow(meta: DownloadMeta, onOpen: () -> Unit, onDelet
 }
 
 private fun trimNumber(n: Float): String = if (n % 1f == 0f) n.toInt().toString() else n.toString()
+
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1_000_000_000L -> "%.1f GB".format(bytes / 1_000_000_000.0)
+    bytes >= 1_000_000L -> "%.0f MB".format(bytes / 1_000_000.0)
+    bytes >= 1_000L -> "%.0f KB".format(bytes / 1_000.0)
+    else -> "$bytes B"
+}

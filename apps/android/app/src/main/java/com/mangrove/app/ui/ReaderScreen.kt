@@ -40,8 +40,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import coil.request.ImageRequest
 import com.mangrove.app.data.AppContainer
 import com.mangrove.app.data.ChapterManifestDto
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -56,6 +58,7 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
     var dirPref by remember { mutableStateOf("auto") }
     var startPage by remember { mutableIntStateOf(0) }
     var menuOpen by remember { mutableStateOf(false) }
+    var chromeVisible by remember { mutableStateOf(true) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(chapterId) {
@@ -107,6 +110,25 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
             .collect { page -> container.saveProgress(chapterId, page) }
     }
 
+    // Cross-chapter preload: once near the end, warm the next chapter's first pages in Coil's cache
+    // so opening it (the slowest moment over the network) is instant. Skipped when reading offline.
+    val context = LocalContext.current
+    var prewarmedNext by remember(chapterId) { mutableStateOf(false) }
+    LaunchedEffect(pagerState.currentPage, m.nextChapterId, offline) {
+        val nextId = m.nextChapterId
+        if (offline || nextId == null || prewarmedNext) return@LaunchedEffect
+        if (pagerState.currentPage < m.pageCount - 2) return@LaunchedEffect
+        val loader = container.imageLoader ?: return@LaunchedEffect
+        prewarmedNext = true
+        for (p in 0..2) {
+            loader.enqueue(
+                ImageRequest.Builder(context)
+                    .data(container.absoluteUrl("api/chapters/$nextId/pages/$p"))
+                    .build(),
+            )
+        }
+    }
+
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         HorizontalPager(
             state = pagerState,
@@ -115,20 +137,26 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
             userScrollEnabled = scale <= 1.01f,
             // Compose neighbouring pages ahead of time so their images are already
             // loaded (and cached) by the time you swipe to them.
-            beyondViewportPageCount = 2,
+            beyondViewportPageCount = 3,
             modifier = Modifier.fillMaxSize(),
         ) { page ->
             ZoomableImage(
                 scale = scale,
                 offset = offset,
                 onChange = { s, o -> scale = s; offset = o },
-                onTapSide = { isRight ->
-                    // Tapping a side turns the page; right advances reading order (flipped for RTL).
-                    val forward = if (rtl) !isRight else isRight
-                    val target = (pagerState.currentPage + if (forward) 1 else -1)
-                        .coerceIn(0, m.pageCount - 1)
-                    if (target != pagerState.currentPage) {
-                        scope.launch { pagerState.animateScrollToPage(target) }
+                onTap = { fraction ->
+                    // Outer thirds turn the page; the center third toggles the chrome/overlay.
+                    when {
+                        fraction in (1f / 3f)..(2f / 3f) -> chromeVisible = !chromeVisible
+                        else -> {
+                            val isRight = fraction > 0.5f
+                            val forward = if (rtl) !isRight else isRight
+                            val target = (pagerState.currentPage + if (forward) 1 else -1)
+                                .coerceIn(0, m.pageCount - 1)
+                            if (target != pagerState.currentPage) {
+                                scope.launch { pagerState.animateScrollToPage(target) }
+                            }
+                        }
                     }
                 },
             ) {
@@ -152,7 +180,8 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
             }
         }
 
-        // Top chrome: back, page indicator, direction menu.
+        // Top chrome: back, page indicator, direction menu. Tap the center of a page to toggle.
+        if (chromeVisible) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -193,6 +222,7 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
                 }
             }
         }
+        }
     }
 }
 
@@ -210,7 +240,7 @@ private fun ZoomableImage(
     scale: Float,
     offset: Offset,
     onChange: (Float, Offset) -> Unit,
-    onTapSide: (isRight: Boolean) -> Unit,
+    onTap: (fraction: Float) -> Unit,
     content: @Composable () -> Unit,
 ) {
     val curScale by rememberUpdatedState(scale)
@@ -240,7 +270,7 @@ private fun ZoomableImage(
                         onDoubleTap = {
                             if (curScale > 1f) onChange(1f, Offset.Zero) else onChange(2.5f, Offset.Zero)
                         },
-                        onTap = { pos -> onTapSide(pos.x > size.width / 2f) },
+                        onTap = { pos -> onTap(pos.x / size.width.toFloat()) },
                     )
                 }
                 .pointerInput(Unit) {

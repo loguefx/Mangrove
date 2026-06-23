@@ -48,6 +48,21 @@ interface MangroveApi {
     @GET("api/series/{id}")
     suspend fun seriesDetail(@Path("id") id: Int): SeriesDetailDto
 
+    @GET("api/progress")
+    suspend fun seriesProgress(@Query("seriesId") seriesId: Int): List<ProgressDto>
+
+    @POST("api/progress/chapter/{id}/read")
+    suspend fun markChapterRead(@Path("id") id: Int)
+
+    @POST("api/progress/chapter/{id}/unread")
+    suspend fun markChapterUnread(@Path("id") id: Int)
+
+    @POST("api/progress/series/{id}/read")
+    suspend fun markSeriesRead(@Path("id") id: Int)
+
+    @POST("api/progress/series/{id}/unread")
+    suspend fun markSeriesUnread(@Path("id") id: Int)
+
     // ---- Favorites (want-to-read) ----
 
     @GET("api/want-to-read")

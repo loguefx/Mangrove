@@ -83,4 +83,18 @@ class DownloadStore(context: Context) {
         allMetas().filter { it.seriesId == seriesId }.forEach { deleteChapter(it.chapterId) }
         seriesCoverFile(seriesId).delete()
     }
+
+    private fun File.dirSize(): Long =
+        if (exists()) walkTopDown().filter { it.isFile }.sumOf { it.length() } else 0L
+
+    /** Total bytes used by all downloads (pages + covers + metadata). */
+    fun totalBytes(): Long = root.dirSize()
+
+    /** Bytes used by a single downloaded series (its chapters + cached cover). */
+    fun seriesBytes(seriesId: Int): Long {
+        val chapters = allMetas().filter { it.seriesId == seriesId }
+            .sumOf { chapterDir(it.chapterId).dirSize() }
+        val cover = seriesCoverFile(seriesId).let { if (it.exists()) it.length() else 0L }
+        return chapters + cover
+    }
 }

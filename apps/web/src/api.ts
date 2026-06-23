@@ -230,6 +230,8 @@ export interface ChapterManifestDto {
   readingDirection: string;
   format: string;
   mediaType: string; // "image" | "epub"
+  prevChapterId?: number | null;
+  nextChapterId?: number | null;
 }
 
 export interface EpubSpineItemDto {
@@ -424,6 +426,21 @@ export const api = {
   progressForChapter: (chapterId: number) =>
     request<{ chapterId: number; page: number; isRead: boolean }>(`/api/progress/${chapterId}`),
 
+  seriesProgress: (seriesId: number) =>
+    request<{ chapterId: number; page: number; isRead: boolean; updatedAt: string }[]>(
+      `/api/progress?seriesId=${seriesId}`
+    ),
+
+  markChapterRead: (chapterId: number, read: boolean) =>
+    request<void>(`/api/progress/chapter/${chapterId}/${read ? "read" : "unread"}`, {
+      method: "POST",
+    }),
+
+  markSeriesRead: (seriesId: number, read: boolean) =>
+    request<void>(`/api/progress/series/${seriesId}/${read ? "read" : "unread"}`, {
+      method: "POST",
+    }),
+
   search: (q: string) => request<SearchResultDto[]>(`/api/search?q=${encodeURIComponent(q)}`),
 
   dashboard: () => request<DashboardDto>("/api/dashboard"),
@@ -563,6 +580,20 @@ async function authedFetch(path: string): Promise<Response> {
     res = await fetch(path, { headers, credentials: "include" });
   }
   return res;
+}
+
+/**
+ * Best-effort warm of an authenticated binary endpoint. Consuming the body populates the browser's
+ * HTTP cache (pages are sent with a long max-age) and, more importantly, warms the server's archive
+ * cache so the expensive first read over the NAS happens *before* the user navigates there.
+ */
+export async function prefetchAuthed(path: string): Promise<void> {
+  try {
+    const res = await authedFetch(path);
+    if (res.ok) await res.blob();
+  } catch {
+    /* prefetch is best-effort; ignore failures */
+  }
 }
 
 /** Fetches an authenticated binary endpoint (e.g. a reader page) as an object URL. */

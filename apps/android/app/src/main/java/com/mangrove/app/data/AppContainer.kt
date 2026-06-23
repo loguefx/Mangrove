@@ -115,6 +115,13 @@ class AppContainer(context: Context) {
     ) = requireBackend().api.series(libraryId, filter, sort, genre, status)
     suspend fun libraryGenres(libraryId: Int) = requireBackend().api.libraryGenres(libraryId)
     suspend fun seriesDetail(id: Int) = requireBackend().api.seriesDetail(id)
+    suspend fun seriesProgress(seriesId: Int) = requireBackend().api.seriesProgress(seriesId)
+    suspend fun markChapterRead(chapterId: Int, read: Boolean) =
+        if (read) requireBackend().api.markChapterRead(chapterId)
+        else requireBackend().api.markChapterUnread(chapterId)
+    suspend fun markSeriesRead(seriesId: Int, read: Boolean) =
+        if (read) requireBackend().api.markSeriesRead(seriesId)
+        else requireBackend().api.markSeriesUnread(seriesId)
 
     suspend fun wantToRead() = requireBackend().api.wantToRead()
     suspend fun favoritesUnread() = requireBackend().api.favoritesUnread()

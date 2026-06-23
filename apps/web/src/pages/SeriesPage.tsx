@@ -22,12 +22,28 @@ export default function SeriesPage() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
   const [coverVersion, setCoverVersion] = useState(0);
+  const [readIds, setReadIds] = useState<Set<number>>(new Set());
+  const [progressRows, setProgressRows] = useState<
+    { chapterId: number; page: number; isRead: boolean; updatedAt: string }[]
+  >([]);
+
+  const reloadProgress = async (seriesId: number) => {
+    try {
+      const rows = await api.seriesProgress(seriesId);
+      setProgressRows(rows);
+      setReadIds(new Set(rows.filter((r) => r.isRead).map((r) => r.chapterId)));
+    } catch {
+      setProgressRows([]);
+      setReadIds(new Set());
+    }
+  };
 
   const reload = async () => {
     if (!id) return;
     const detail = await api.seriesDetail(Number(id));
     setSeries(detail);
     api.reviews(Number(id)).then(setReviews).catch(() => setReviews([]));
+    void reloadProgress(Number(id));
   };
 
   useEffect(() => {
@@ -61,13 +77,47 @@ export default function SeriesPage() {
     setSeries({ ...series, wantToRead: !series.wantToRead });
   };
 
+  const totalChapters = series.volumes.reduce((n, v) => n + v.chapters.length, 0);
+  const allRead = totalChapters > 0 && readIds.size >= totalChapters;
+  const resume = computeResume(series, progressRows);
+
+  const markAll = async (read: boolean) => {
+    await api.markSeriesRead(series.id, read);
+    await reloadProgress(series.id);
+  };
+
+  const toggleChapterRead = async (chapterId: number, read: boolean) => {
+    setReadIds((prev) => {
+      const next = new Set(prev);
+      if (read) next.add(chapterId);
+      else next.delete(chapterId);
+      return next;
+    });
+    try {
+      await api.markChapterRead(chapterId, read);
+    } catch {
+      void reloadProgress(series.id); // resync on failure
+    }
+  };
+
   const rate = async (stars: number) => {
     await api.rate(series.id, stars);
     await reload();
   };
 
   return (
-    <div className="mx-auto max-w-5xl p-6">
+    <div className="page-fade relative">
+      {series.hasCover && (
+        <div className="pointer-events-none absolute inset-x-0 top-0 h-[22rem] overflow-hidden">
+          <img
+            src={`/api/series/${series.id}/cover${coverVersion ? `?v=${coverVersion}` : ""}`}
+            alt=""
+            className="h-full w-full scale-110 object-cover opacity-30 blur-2xl"
+          />
+          <div className="absolute inset-0 bg-gradient-to-b from-neutral-950/40 to-neutral-950" />
+        </div>
+      )}
+      <div className="relative mx-auto max-w-5xl p-6">
       <button
         onClick={() => navigate(-1)}
         className="mb-4 inline-block text-sm text-teal-mint hover:underline"
@@ -185,6 +235,39 @@ export default function SeriesPage() {
         />
       )}
 
+      {resume && (
+        <Link
+          to={`/reader/${resume.chapterId}`}
+          className="mb-4 flex items-center justify-between gap-4 rounded-2xl bg-teal/15 px-5 py-4 ring-1 ring-teal-mint/30 transition hover:bg-teal/25"
+        >
+          <div>
+            <div className="text-xs font-medium uppercase tracking-wide text-teal-mint">
+              {resume.isNext ? "Up next" : "Continue reading"}
+            </div>
+            <div className="mt-0.5 font-semibold text-neutral-100">
+              {resume.label}
+              {!resume.isNext && resume.page > 0 && (
+                <span className="ml-2 text-sm font-normal text-neutral-400">
+                  page {resume.page + 1}
+                </span>
+              )}
+            </div>
+          </div>
+          <span className="shrink-0 rounded-xl bg-teal px-4 py-2 text-sm font-medium text-white">
+            {resume.isNext ? "Start →" : "Resume →"}
+          </span>
+        </Link>
+      )}
+
+      <div className="mb-3 flex items-center justify-end gap-2">
+        <button
+          onClick={() => markAll(!allRead)}
+          className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm text-neutral-300 hover:border-teal-mint hover:text-teal-mint"
+        >
+          {allRead ? "Mark all as unread" : "Mark all as read"}
+        </button>
+      </div>
+
       <div className="space-y-6">
         {series.volumes.map((vol) => (
           <section key={vol.id}>
@@ -192,45 +275,94 @@ export default function SeriesPage() {
               {vol.number > 0 ? `Volume ${vol.number}` : "Chapters"}
             </h2>
             <div className="divide-y divide-neutral-800 overflow-hidden rounded-2xl ring-1 ring-white/5">
-              {vol.chapters.map((ch) => (
-                <div
-                  key={ch.id}
-                  className="flex items-center justify-between bg-neutral-900 px-4 py-3 transition hover:bg-neutral-800"
-                >
-                  <Link to={`/reader/${ch.id}`} className="flex-1">
-                    <span className="font-medium">
-                      {ch.title ?? (ch.number > 0 ? `Chapter ${ch.number}` : "Chapter")}
-                    </span>
-                    <span className="ml-2 text-sm text-neutral-500">
-                      {ch.pageCount} {ch.fileFormat === "epub" ? "sections" : "pages"} ·{" "}
-                      {ch.fileFormat.toUpperCase()}
-                    </span>
-                  </Link>
-                  <div className="flex items-center gap-3">
-                    <AddToReadingList chapterId={ch.id} />
-                    {canDownload && ch.fileFormat !== "images" && (
-                      <button
-                        onClick={() => downloadChapter(ch.id)}
-                        className="text-sm text-neutral-400 hover:text-teal-mint"
-                        title="Download"
-                      >
-                        ↓
-                      </button>
-                    )}
-                    <Link to={`/reader/${ch.id}`} className="text-sm text-teal-mint">
-                      Read →
+              {vol.chapters.map((ch) => {
+                const read = readIds.has(ch.id);
+                return (
+                  <div
+                    key={ch.id}
+                    className="flex items-center justify-between bg-neutral-900 px-4 py-3 transition hover:bg-neutral-800"
+                  >
+                    <Link to={`/reader/${ch.id}`} className={`flex-1 ${read ? "opacity-50" : ""}`}>
+                      <span className="font-medium">
+                        {ch.title ?? (ch.number > 0 ? `Chapter ${ch.number}` : "Chapter")}
+                      </span>
+                      <span className="ml-2 text-sm text-neutral-500">
+                        {ch.pageCount} {ch.fileFormat === "epub" ? "sections" : "pages"} ·{" "}
+                        {ch.fileFormat.toUpperCase()}
+                      </span>
                     </Link>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => toggleChapterRead(ch.id, !read)}
+                        className={`flex h-6 w-6 items-center justify-center rounded-full border text-xs ${
+                          read
+                            ? "border-teal-mint bg-teal-mint/20 text-teal-mint"
+                            : "border-neutral-600 text-neutral-500 hover:border-teal-mint hover:text-teal-mint"
+                        }`}
+                        title={read ? "Mark as unread" : "Mark as read"}
+                      >
+                        ✓
+                      </button>
+                      <AddToReadingList chapterId={ch.id} />
+                      {canDownload && ch.fileFormat !== "images" && (
+                        <button
+                          onClick={() => downloadChapter(ch.id)}
+                          className="text-sm text-neutral-400 hover:text-teal-mint"
+                          title="Download"
+                        >
+                          ↓
+                        </button>
+                      )}
+                      <Link to={`/reader/${ch.id}`} className="text-sm text-teal-mint">
+                        Read →
+                      </Link>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </section>
         ))}
       </div>
 
       <ReviewsSection seriesId={series.id} reviews={reviews} onPosted={reload} />
+      </div>
     </div>
   );
+}
+
+type ResumeTarget = {
+  chapterId: number;
+  page: number;
+  label: string; // e.g. "Chapter 7"
+  isNext: boolean; // true => "Up next" (start of an unread chapter), false => "Resume"
+};
+
+/**
+ * Works out where the reader should drop the user next: the most recently touched chapter if it's
+ * still in progress, otherwise the next unread chapter after the last one they finished.
+ */
+function computeResume(
+  series: SeriesDetailDto,
+  rows: { chapterId: number; page: number; isRead: boolean; updatedAt: string }[]
+): ResumeTarget | null {
+  const ordered = series.volumes.flatMap((v) => v.chapters);
+  if (ordered.length === 0 || rows.length === 0) return null;
+
+  const label = (ch: { number: number; title?: string | null }) =>
+    ch.title?.trim() || (ch.number > 0 ? `Chapter ${ch.number}` : "Chapter");
+
+  const latest = [...rows].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  const idx = ordered.findIndex((c) => c.id === latest.chapterId);
+  if (idx < 0) return null;
+
+  if (!latest.isRead) {
+    const ch = ordered[idx];
+    return { chapterId: ch.id, page: latest.page, label: label(ch), isNext: false };
+  }
+  const next = ordered[idx + 1];
+  if (!next) return null; // finished the latest chapter and nothing after it
+  return { chapterId: next.id, page: 0, label: label(next), isNext: true };
 }
 
 async function downloadChapter(chapterId: number) {

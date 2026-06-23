@@ -70,7 +70,7 @@ public sealed record VolumeDto(int Id, float Number, string? Name, IReadOnlyList
 public sealed record ChapterDto(int Id, float Number, string? Title, int PageCount, string FileFormat, bool HasCover);
 
 // ---- Reading ----
-public sealed record ChapterManifestDto(int Id, int PageCount, string ReadingDirection, string Format, string MediaType);
+public sealed record ChapterManifestDto(int Id, int PageCount, string ReadingDirection, string Format, string MediaType, int? PrevChapterId = null, int? NextChapterId = null);
 public sealed record ProgressRequest(int ChapterId, int Page, double? ScrollOffset, bool? IsRead);
 public sealed record ProgressDto(int ChapterId, int Page, double? ScrollOffset, bool IsRead, DateTime UpdatedAt);
 

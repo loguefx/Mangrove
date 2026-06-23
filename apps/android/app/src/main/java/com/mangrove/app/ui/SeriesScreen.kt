@@ -23,6 +23,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Downloading
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -56,13 +57,37 @@ import com.mangrove.app.data.ChapterDto
 import com.mangrove.app.data.DownloadProgress
 import com.mangrove.app.data.DownloadRequest
 import com.mangrove.app.data.DownloadState
+import com.mangrove.app.data.ProgressDto
 import com.mangrove.app.data.SeriesDetailDto
 import com.mangrove.app.ui.theme.BgDark
 import com.mangrove.app.ui.theme.TealMint
 
 private data class ChapterRow(val chapter: ChapterDto, val volumeNumber: Float)
 
+private data class ResumeTarget(val chapterId: Int, val page: Int, val label: String, val isNext: Boolean)
+
 private fun isEpub(format: String) = format.equals("epub", ignoreCase = true)
+
+/**
+ * Where to drop the reader next: the most recently touched chapter if still in progress, otherwise
+ * the next unread chapter after the last one finished. Null when there's nothing meaningful to resume.
+ */
+private fun computeResume(rows: List<ChapterRow>, progress: List<ProgressDto>): ResumeTarget? {
+    if (rows.isEmpty() || progress.isEmpty()) return null
+    fun label(c: ChapterDto): String =
+        c.title?.takeIf { it.isNotBlank() }
+            ?: if (c.number > 0f) "Chapter ${trimNum(c.number)}" else "Chapter"
+
+    val latest = progress.maxByOrNull { it.updatedAt ?: "" } ?: return null
+    val idx = rows.indexOfFirst { it.chapter.id == latest.chapterId }
+    if (idx < 0) return null
+    if (!latest.isRead) {
+        val c = rows[idx].chapter
+        return ResumeTarget(c.id, latest.page, label(c), isNext = false)
+    }
+    val next = rows.getOrNull(idx + 1) ?: return null
+    return ResumeTarget(next.chapter.id, 0, label(next.chapter), isNext = true)
+}
 
 @Composable
 fun SeriesScreen(container: AppContainer, nav: NavController, seriesId: Int) {
@@ -71,13 +96,36 @@ fun SeriesScreen(container: AppContainer, nav: NavController, seriesId: Int) {
     var favorite by remember { mutableStateOf(false) }
     val progress by container.downloadManager.progress.collectAsState()
     var downloadedIds by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    var readIds by remember { mutableStateOf<Set<Int>>(emptySet()) }
+    var progressRows by remember { mutableStateOf<List<ProgressDto>>(emptyList()) }
 
     val scope = rememberCoroutineScope()
+
+    suspend fun loadProgress() {
+        progressRows = runCatching { container.seriesProgress(seriesId) }.getOrDefault(emptyList())
+        readIds = progressRows.filter { it.isRead }.map { it.chapterId }.toSet()
+    }
 
     suspend fun load() {
         runCatching { container.seriesDetail(seriesId) }
             .onSuccess { detail = it; favorite = it.wantToRead; failed = false }
             .onFailure { if (detail == null) failed = true }
+        loadProgress()
+    }
+
+    fun toggleChapterRead(chapterId: Int, read: Boolean) {
+        readIds = if (read) readIds + chapterId else readIds - chapterId // optimistic
+        scope.launch {
+            val ok = runCatching { container.markChapterRead(chapterId, read) }.isSuccess
+            if (!ok) loadProgress()
+        }
+    }
+
+    fun markAllRead(read: Boolean) {
+        scope.launch {
+            runCatching { container.markSeriesRead(seriesId, read) }
+            loadProgress()
+        }
     }
 
     fun toggleFavorite() {
@@ -135,6 +183,7 @@ fun SeriesScreen(container: AppContainer, nav: NavController, seriesId: Int) {
                 val rows = d.volumes
                     .sortedBy { it.number }
                     .flatMap { v -> v.chapters.sortedBy { it.number }.map { ChapterRow(it, v.number) } }
+                val resume = computeResume(rows, progressRows)
 
                 LazyColumn(Modifier.fillMaxSize()) {
                     item {
@@ -196,6 +245,40 @@ fun SeriesScreen(container: AppContainer, nav: NavController, seriesId: Int) {
                             }
                         }
 
+                        resume?.let { r ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .background(TealMint.copy(alpha = 0.15f))
+                                    .clickable { nav.navigate("reader/${r.chapterId}") }
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(
+                                        if (r.isNext) "UP NEXT" else "CONTINUE READING",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = TealMint,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    Text(
+                                        r.label + if (!r.isNext && r.page > 0) " · page ${r.page + 1}" else "",
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                                Text(
+                                    if (r.isNext) "Start →" else "Resume →",
+                                    color = TealMint,
+                                    fontWeight = FontWeight.SemiBold,
+                                )
+                            }
+                        }
+
                         Column(Modifier.padding(horizontal = 16.dp)) {
                             listOfNotNull(
                                 d.writer?.takeIf { it.isNotBlank() }?.let { "Story: $it" },
@@ -216,6 +299,10 @@ fun SeriesScreen(container: AppContainer, nav: NavController, seriesId: Int) {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             SectionTitle("Chapters")
                             androidx.compose.foundation.layout.Spacer(Modifier.weight(1f))
+                            val allRead = rows.isNotEmpty() && rows.all { it.chapter.id in readIds }
+                            TextButton(onClick = { markAllRead(!allRead) }) {
+                                Text(if (allRead) "Mark unread" else "Mark all read", color = TealMint)
+                            }
                             val downloadable = rows.filter { !isEpub(it.chapter.fileFormat) && it.chapter.id !in downloadedIds }
                             if (downloadable.isNotEmpty()) {
                                 TextButton(onClick = {
@@ -235,6 +322,8 @@ fun SeriesScreen(container: AppContainer, nav: NavController, seriesId: Int) {
                         ChapterListItem(
                             row = row,
                             downloaded = row.chapter.id in downloadedIds,
+                            read = row.chapter.id in readIds,
+                            onToggleRead = { toggleChapterRead(row.chapter.id, row.chapter.id !in readIds) },
                             progress = progress[row.chapter.id],
                             epub = isEpub(row.chapter.fileFormat),
                             onOpen = { nav.navigate("reader/${row.chapter.id}") },
@@ -260,6 +349,8 @@ fun SeriesScreen(container: AppContainer, nav: NavController, seriesId: Int) {
 private fun ChapterListItem(
     row: ChapterRow,
     downloaded: Boolean,
+    read: Boolean,
+    onToggleRead: () -> Unit,
     progress: DownloadProgress?,
     epub: Boolean,
     onOpen: () -> Unit,
@@ -279,10 +370,21 @@ private fun ChapterListItem(
         Modifier
             .fillMaxWidth()
             .clickable(onClick = onOpen)
-            .padding(start = 16.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+            .padding(start = 8.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(label, modifier = Modifier.weight(1f), maxLines = 2)
+        IconButton(onClick = onToggleRead) {
+            Icon(
+                if (read) Icons.Filled.CheckCircle else Icons.Outlined.CheckCircle,
+                contentDescription = if (read) "Mark as unread" else "Mark as read",
+                tint = if (read) TealMint else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        Text(
+            label,
+            modifier = Modifier.weight(1f).alpha(if (read) 0.5f else 1f),
+            maxLines = 2,
+        )
         Text(
             "${c.pageCount}p",
             style = MaterialTheme.typography.bodySmall,
