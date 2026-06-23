@@ -108,6 +108,11 @@ class AppContainer(context: Context) {
     suspend fun libraries() = requireBackend().api.libraries()
     suspend fun series(libraryId: Int, filter: String?) = requireBackend().api.series(libraryId, filter)
     suspend fun seriesDetail(id: Int) = requireBackend().api.seriesDetail(id)
+
+    suspend fun wantToRead() = requireBackend().api.wantToRead()
+    suspend fun favoritesUnread() = requireBackend().api.favoritesUnread()
+    suspend fun addFavorite(seriesId: Int) = requireBackend().api.addWantToRead(seriesId)
+    suspend fun removeFavorite(seriesId: Int) = requireBackend().api.removeWantToRead(seriesId)
     suspend fun manifest(chapterId: Int) = requireBackend().api.chapterManifest(chapterId)
     suspend fun progress(chapterId: Int) = runCatching { requireBackend().api.progress(chapterId) }.getOrNull()
     suspend fun saveProgress(chapterId: Int, page: Int) =

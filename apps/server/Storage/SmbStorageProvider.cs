@@ -71,4 +71,20 @@ public sealed class SmbStorageProvider : IStorageProvider
         Stream stream = new SmbReadStream(conn, handle, length);
         return Task.FromResult(stream);
     }
+
+    public Task WriteAsync(string path, byte[] data, CancellationToken ct = default)
+    {
+        var sp = StoragePath.ParseRemote(path);
+        var conn = _pool.Acquire(sp.Host, sp.Share, _credential);
+        conn.Gate.Wait(ct);
+        try
+        {
+            conn.WriteAllBytes(sp.RelativePath, data);
+            return Task.CompletedTask;
+        }
+        finally
+        {
+            conn.Gate.Release();
+        }
+    }
 }

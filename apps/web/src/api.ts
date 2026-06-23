@@ -296,7 +296,9 @@ class ApiError extends Error {
 async function request<T>(path: string, options: RequestInit = {}, retry = true): Promise<T> {
   const headers = new Headers(options.headers);
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
-  if (options.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  // FormData sets its own multipart Content-Type (with boundary); never override it.
+  if (options.body && !(options.body instanceof FormData) && !headers.has("Content-Type"))
+    headers.set("Content-Type", "application/json");
 
   const res = await fetch(path, { ...options, headers, credentials: "include" });
 
@@ -426,6 +428,12 @@ export const api = {
       ageRating?: string | null;
     }
   ) => request<SeriesDetailDto>(`/api/series/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+
+  uploadSeriesCover: (id: number, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<SeriesDetailDto>(`/api/series/${id}/cover`, { method: "POST", body: form });
+  },
 
   testStorage: (body: {
     storageKind: number;

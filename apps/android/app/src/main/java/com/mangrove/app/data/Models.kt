@@ -73,6 +73,16 @@ data class DashboardDto(
 )
 
 @Serializable
+data class FavoriteUnread(
+    val seriesId: Int,
+    val seriesName: String,
+    val hasCover: Boolean = false,
+    val newChapters: Int = 0,
+    val nextChapterId: Int = 0,
+    val nextChapterNumber: Float = 0f,
+)
+
+@Serializable
 data class ChapterDto(
     val id: Int,
     val number: Float = 0f,
@@ -105,6 +115,7 @@ data class SeriesDetailDto(
     val language: String? = null,
     val writer: String? = null,
     val penciller: String? = null,
+    val wantToRead: Boolean = false,
 )
 
 @Serializable

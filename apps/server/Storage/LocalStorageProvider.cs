@@ -49,4 +49,12 @@ public sealed class LocalStorageProvider : IStorageProvider
             bufferSize: 1 << 16, useAsync: true);
         return Task.FromResult(s);
     }
+
+    public async Task WriteAsync(string path, byte[] data, CancellationToken ct = default)
+    {
+        var sp = StoragePath.ParseLocal(path);
+        var dir = Path.GetDirectoryName(sp.RelativePath);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        await File.WriteAllBytesAsync(sp.RelativePath, data, ct);
+    }
 }

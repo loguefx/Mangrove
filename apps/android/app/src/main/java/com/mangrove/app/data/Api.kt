@@ -43,6 +43,20 @@ interface MangroveApi {
     @GET("api/series/{id}")
     suspend fun seriesDetail(@Path("id") id: Int): SeriesDetailDto
 
+    // ---- Favorites (want-to-read) ----
+
+    @GET("api/want-to-read")
+    suspend fun wantToRead(): List<SeriesDto>
+
+    @GET("api/want-to-read/unread")
+    suspend fun favoritesUnread(): List<FavoriteUnread>
+
+    @POST("api/want-to-read/{seriesId}")
+    suspend fun addWantToRead(@Path("seriesId") seriesId: Int)
+
+    @DELETE("api/want-to-read/{seriesId}")
+    suspend fun removeWantToRead(@Path("seriesId") seriesId: Int)
+
     @GET("api/chapters/{id}/manifest")
     suspend fun chapterManifest(@Path("id") id: Int): ChapterManifestDto
 

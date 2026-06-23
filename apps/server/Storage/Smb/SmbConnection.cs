@@ -32,6 +32,7 @@ public sealed class SmbConnection : IDisposable
     }
 
     public uint MaxReadSize => _client?.MaxReadSize ?? 65536u;
+    public uint MaxWriteSize => _client?.MaxWriteSize ?? 65536u;
 
     public bool IsHealthy => _client is { IsConnected: true } && _fileStore is not null;
 
@@ -172,6 +173,39 @@ public sealed class SmbConnection : IDisposable
     {
         try { _fileStore?.CloseFile(handle); }
         catch (Exception ex) { _logger.LogDebug(ex, "Error closing SMB handle"); }
+    }
+
+    /// <summary>Creates or overwrites a file with the given bytes, writing in MaxWriteSize chunks.</summary>
+    public void WriteAllBytes(string relativePath, byte[] data)
+    {
+        EnsureConnected();
+        var store = _fileStore!;
+
+        var status = store.CreateFile(out var handle, out _, relativePath,
+            AccessMask.GENERIC_WRITE | AccessMask.SYNCHRONIZE, FileAttributes.Normal,
+            ShareAccess.None,
+            CreateDisposition.FILE_OVERWRITE_IF, CreateOptions.FILE_NON_DIRECTORY_FILE, null);
+        ThrowIfBad(status, $"create file '{relativePath}'");
+
+        try
+        {
+            var chunk = (int)Math.Max(1u, MaxWriteSize);
+            long offset = 0;
+            while (offset < data.Length)
+            {
+                var count = (int)Math.Min(chunk, data.Length - offset);
+                var buffer = new byte[count];
+                Array.Copy(data, offset, buffer, 0, count);
+                var writeStatus = store.WriteFile(out var written, handle, offset, buffer);
+                ThrowIfBad(writeStatus, $"write file '{relativePath}'");
+                if (written <= 0) break;
+                offset += written;
+            }
+        }
+        finally
+        {
+            store.CloseFile(handle);
+        }
     }
 
     private static IPAddress ResolveHost(string host)

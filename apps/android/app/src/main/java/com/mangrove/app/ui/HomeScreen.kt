@@ -27,6 +27,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -36,7 +37,9 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.mangrove.app.data.AppContainer
 import com.mangrove.app.data.DashboardDto
+import com.mangrove.app.data.FavoriteUnread
 import com.mangrove.app.data.LibraryDto
+import com.mangrove.app.data.SeriesDto
 import com.mangrove.app.ui.theme.BgDark
 import com.mangrove.app.ui.theme.TealDeep
 import kotlinx.coroutines.launch
@@ -46,6 +49,8 @@ import kotlinx.coroutines.launch
 fun HomeScreen(container: AppContainer, nav: NavController) {
     var dashboard by remember { mutableStateOf<DashboardDto?>(null) }
     var libraries by remember { mutableStateOf<List<LibraryDto>>(emptyList()) }
+    var favorites by remember { mutableStateOf<List<SeriesDto>>(emptyList()) }
+    var unread by remember { mutableStateOf<List<FavoriteUnread>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var firstLoadDone by remember { mutableStateOf(false) }
@@ -54,6 +59,8 @@ fun HomeScreen(container: AppContainer, nav: NavController) {
     suspend fun fetch() {
         dashboard = runCatching { container.dashboard() }.getOrNull()
         libraries = runCatching { container.libraries() }.getOrDefault(emptyList())
+        favorites = runCatching { container.wantToRead() }.getOrDefault(emptyList())
+        unread = runCatching { container.favoritesUnread() }.getOrDefault(emptyList())
     }
 
     LaunchedEffect(Unit) {
@@ -117,6 +124,28 @@ fun HomeScreen(container: AppContainer, nav: NavController) {
                     }
                 }
 
+                if (unread.isNotEmpty()) {
+                    SectionTitle("Catch up — new in favorites")
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        items(unread, key = { it.seriesId }) { c ->
+                            Box(Modifier.width(124.dp)) {
+                                CoverCard(
+                                    container = container,
+                                    coverPath = if (c.hasCover) "api/series/${c.seriesId}/cover" else null,
+                                    title = c.seriesName,
+                                    subtitle = "Ch. ${fmtNum(c.nextChapterNumber)}",
+                                    onClick = { nav.navigate("reader/${c.nextChapterId}") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                UnreadBadge(c.newChapters, Modifier.align(Alignment.TopEnd))
+                            }
+                        }
+                    }
+                }
+
                 val cont = dashboard?.continueReading ?: emptyList()
                 if (cont.isNotEmpty()) {
                     SectionTitle("Continue reading")
@@ -133,6 +162,28 @@ fun HomeScreen(container: AppContainer, nav: NavController) {
                                 onClick = { nav.navigate("reader/${c.chapterId}") },
                                 modifier = Modifier.width(124.dp),
                             )
+                        }
+                    }
+                }
+
+                if (favorites.isNotEmpty()) {
+                    val newBySeries = unread.associateBy { it.seriesId }
+                    SectionTitle("Favorites")
+                    LazyRow(
+                        contentPadding = PaddingValues(horizontal = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        items(favorites, key = { it.id }) { s ->
+                            Box(Modifier.width(124.dp)) {
+                                CoverCard(
+                                    container = container,
+                                    coverPath = if (s.hasCover) "api/series/${s.id}/cover" else null,
+                                    title = s.name,
+                                    onClick = { nav.navigate("series/${s.id}") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                newBySeries[s.id]?.let { UnreadBadge(it.newChapters, Modifier.align(Alignment.TopEnd)) }
+                            }
                         }
                     }
                 }
@@ -156,7 +207,9 @@ fun HomeScreen(container: AppContainer, nav: NavController) {
                     }
                 }
 
-                if (libraries.isEmpty() && cont.isEmpty() && recent.isEmpty()) {
+                if (libraries.isEmpty() && cont.isEmpty() && recent.isEmpty() &&
+                    favorites.isEmpty() && unread.isEmpty()
+                ) {
                     MessageBox("Nothing here yet. Add and scan a library from the web app.", Modifier.height(300.dp))
                 }
             }

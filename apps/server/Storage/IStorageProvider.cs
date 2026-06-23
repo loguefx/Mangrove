@@ -21,4 +21,10 @@ public interface IStorageProvider
     /// straight from the share (spec §5), never copying the whole file unless asked to.
     /// </summary>
     Task<Stream> OpenReadAsync(string path, CancellationToken ct = default);
+
+    /// <summary>
+    /// Writes (creating or overwriting) a file with the given bytes. Used to save a user-uploaded
+    /// series cover back to the library as <c>folder.jpg</c>. Throws if the target is read-only.
+    /// </summary>
+    Task WriteAsync(string path, byte[] data, CancellationToken ct = default);
 }

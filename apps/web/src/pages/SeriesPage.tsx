@@ -21,6 +21,7 @@ export default function SeriesPage() {
   const [reviews, setReviews] = useState<ReviewDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
+  const [coverVersion, setCoverVersion] = useState(0);
 
   const reload = async () => {
     if (!id) return;
@@ -78,7 +79,7 @@ export default function SeriesPage() {
         <div className="h-64 w-44 shrink-0 overflow-hidden rounded-2xl bg-neutral-800 ring-1 ring-white/5">
           {series.hasCover ? (
             <img
-              src={`/api/series/${series.id}/cover`}
+              src={`/api/series/${series.id}/cover${coverVersion ? `?v=${coverVersion}` : ""}`}
               alt={series.name}
               className="h-full w-full object-cover"
             />
@@ -176,6 +177,10 @@ export default function SeriesPage() {
           onSaved={(updated) => {
             setSeries(updated);
             setEditing(false);
+          }}
+          onCoverUpdated={(updated) => {
+            setSeries(updated);
+            setCoverVersion(Date.now());
           }}
         />
       )}
@@ -427,10 +432,12 @@ function MetadataEditor({
   series,
   onCancel,
   onSaved,
+  onCoverUpdated,
 }: {
   series: SeriesDetailDto;
   onCancel: () => void;
   onSaved: (updated: SeriesDetailDto) => void;
+  onCoverUpdated: (updated: SeriesDetailDto) => void;
 }) {
   const [name, setName] = useState(series.name);
   const [summary, setSummary] = useState(series.summary ?? "");
@@ -441,6 +448,36 @@ function MetadataEditor({
   const [ageRating, setAgeRating] = useState(series.ageRating ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [coverFile, setCoverFile] = useState<File | null>(null);
+  const [coverPreview, setCoverPreview] = useState<string | null>(null);
+  const [uploadingCover, setUploadingCover] = useState(false);
+  const [coverMsg, setCoverMsg] = useState<string | null>(null);
+
+  const pickCover = (file: File | null) => {
+    setCoverMsg(null);
+    setCoverFile(file);
+    setCoverPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return file ? URL.createObjectURL(file) : null;
+    });
+  };
+
+  const uploadCover = async () => {
+    if (!coverFile) return;
+    setUploadingCover(true);
+    setCoverMsg(null);
+    setError(null);
+    try {
+      const updated = await api.uploadSeriesCover(series.id, coverFile);
+      pickCover(null);
+      setCoverMsg("Cover updated.");
+      onCoverUpdated(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Cover upload failed");
+    } finally {
+      setUploadingCover(false);
+    }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -516,6 +553,50 @@ function MetadataEditor({
           />
         </label>
       </div>
+
+      <div className="mt-5 border-t border-neutral-800 pt-4">
+        <span className="mb-1 block text-sm text-neutral-400">Cover image</span>
+        <p className="mb-3 text-xs text-neutral-500">
+          Uploads are saved into the series folder as <code>folder.jpg</code>, so they persist across
+          app updates and library re-scans.
+        </p>
+        <div className="flex items-center gap-4">
+          <div className="h-32 w-24 shrink-0 overflow-hidden rounded-lg bg-neutral-800 ring-1 ring-white/5">
+            {coverPreview ? (
+              <img src={coverPreview} alt="New cover preview" className="h-full w-full object-cover" />
+            ) : series.hasCover ? (
+              <img
+                src={`/api/series/${series.id}/cover`}
+                alt={series.name}
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <div className="flex h-full items-center justify-center text-xs text-neutral-600">
+                No cover
+              </div>
+            )}
+          </div>
+          <div className="flex flex-col gap-2">
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(e) => pickCover(e.target.files?.[0] ?? null)}
+              className="text-sm text-neutral-300 file:mr-3 file:rounded-lg file:border-0 file:bg-neutral-800 file:px-3 file:py-1.5 file:text-sm file:text-neutral-200 hover:file:bg-neutral-700"
+            />
+            <div className="flex items-center gap-2">
+              <button
+                onClick={uploadCover}
+                disabled={!coverFile || uploadingCover}
+                className="rounded-xl bg-teal px-4 py-1.5 text-sm font-medium text-white hover:bg-teal/90 disabled:opacity-50"
+              >
+                {uploadingCover ? "Uploading…" : "Upload cover"}
+              </button>
+              {coverMsg && <span className="text-xs text-teal-mint">{coverMsg}</span>}
+            </div>
+          </div>
+        </div>
+      </div>
+
       {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
       <div className="mt-4 flex gap-2">
         <button

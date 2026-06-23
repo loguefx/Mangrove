@@ -22,6 +22,8 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Downloading
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -61,6 +63,7 @@ private fun isEpub(format: String) = format.equals("epub", ignoreCase = true)
 fun SeriesScreen(container: AppContainer, nav: NavController, seriesId: Int) {
     var detail by remember { mutableStateOf<SeriesDetailDto?>(null) }
     var failed by remember { mutableStateOf(false) }
+    var favorite by remember { mutableStateOf(false) }
     val progress by container.downloadManager.progress.collectAsState()
     var downloadedIds by remember { mutableStateOf<Set<Int>>(emptySet()) }
 
@@ -68,8 +71,19 @@ fun SeriesScreen(container: AppContainer, nav: NavController, seriesId: Int) {
 
     suspend fun load() {
         runCatching { container.seriesDetail(seriesId) }
-            .onSuccess { detail = it; failed = false }
+            .onSuccess { detail = it; favorite = it.wantToRead; failed = false }
             .onFailure { if (detail == null) failed = true }
+    }
+
+    fun toggleFavorite() {
+        val want = !favorite
+        favorite = want // optimistic
+        scope.launch {
+            val ok = runCatching {
+                if (want) container.addFavorite(seriesId) else container.removeFavorite(seriesId)
+            }.isSuccess
+            if (!ok) favorite = !want // revert on failure
+        }
     }
 
     LaunchedEffect(seriesId) { load() }
@@ -94,7 +108,18 @@ fun SeriesScreen(container: AppContainer, nav: NavController, seriesId: Int) {
                 fontSize = 20.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
+                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
+            if (detail != null) {
+                IconButton(onClick = { toggleFavorite() }) {
+                    Icon(
+                        if (favorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                        contentDescription = if (favorite) "Remove from favorites" else "Add to favorites",
+                        tint = if (favorite) TealMint else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
         }
 
         when {

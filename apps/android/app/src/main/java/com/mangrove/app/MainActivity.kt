@@ -16,6 +16,7 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -37,6 +38,7 @@ import androidx.navigation.navArgument
 import com.mangrove.app.data.AppContainer
 import com.mangrove.app.ui.AdminScreen
 import com.mangrove.app.ui.DownloadsScreen
+import com.mangrove.app.ui.FavoritesScreen
 import com.mangrove.app.ui.HomeScreen
 import com.mangrove.app.ui.LibrariesScreen
 import com.mangrove.app.ui.LibraryScreen
@@ -78,6 +80,7 @@ private data class TabItem(val route: String, val label: String, val icon: Image
 
 private val TABS = listOf(
     TabItem("home", "Home", Icons.Filled.Home),
+    TabItem("favorites", "Favorites", Icons.Filled.Star),
     TabItem("libraries", "Library", Icons.AutoMirrored.Filled.MenuBook),
     TabItem("downloads", "Downloads", Icons.Filled.Download),
     TabItem("profile", "Profile", Icons.Filled.Person),
@@ -101,6 +104,7 @@ private fun AppRoot(container: AppContainer) {
                 composable("server") { ServerScreen(container, nav) }
                 composable("login") { LoginScreen(container, nav) }
                 composable("home") { HomeScreen(container, nav) }
+                composable("favorites") { FavoritesScreen(container, nav) }
                 composable("libraries") { LibrariesScreen(container, nav) }
                 composable("downloads") { DownloadsScreen(container, nav) }
                 composable("profile") { ProfileScreen(container, nav) }
