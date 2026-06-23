@@ -22,6 +22,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -74,6 +75,7 @@ fun CoverCard(
     modifier: Modifier = Modifier,
     readChapters: Int = 0,
     chapterCount: Int = 0,
+    overlay: Boolean = false,
 ) {
     val read = readChapters.coerceAtMost(chapterCount)
     val completed = chapterCount > 0 && read >= chapterCount
@@ -113,6 +115,39 @@ fun CoverCard(
                 }
             }
 
+            // Poster-style title overlay (gradient fade so text stays legible over any art).
+            if (overlay) {
+                androidx.compose.foundation.layout.Column(
+                    Modifier
+                        .align(Alignment.BottomStart)
+                        .fillMaxWidth()
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(Color.Transparent, Color.Black.copy(alpha = 0.82f)),
+                            ),
+                        )
+                        .padding(start = 8.dp, end = 8.dp, top = 18.dp, bottom = if (inProgress) 8.dp else 6.dp),
+                ) {
+                    Text(
+                        title,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color.White,
+                    )
+                    if (subtitle != null) {
+                        Text(
+                            subtitle,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.8f),
+                        )
+                    }
+                }
+            }
+
             if (inProgress) {
                 Box(
                     Modifier
@@ -130,21 +165,23 @@ fun CoverCard(
                 }
             }
         }
-        Text(
-            title,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.padding(top = 6.dp),
-        )
-        if (subtitle != null) {
+        if (!overlay) {
             Text(
-                subtitle,
-                maxLines = 1,
+                title,
+                maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 6.dp),
             )
+            if (subtitle != null) {
+                Text(
+                    subtitle,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

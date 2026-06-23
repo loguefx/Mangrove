@@ -184,6 +184,7 @@ fun LibraryScreen(container: AppContainer, nav: NavController, libraryId: Int) {
                             onClick = { nav.navigate("series/${s.id}") },
                             readChapters = s.readChapters,
                             chapterCount = s.chapterCount,
+                            overlay = true,
                         )
                     }
                 }

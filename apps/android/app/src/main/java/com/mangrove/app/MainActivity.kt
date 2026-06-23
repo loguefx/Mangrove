@@ -8,6 +8,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.compose.animation.AnimatedContentTransitionScope.SlideDirection
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -99,7 +103,14 @@ private fun AppRoot(container: AppContainer) {
 
     Column(Modifier.fillMaxSize()) {
         Box(Modifier.weight(1f)) {
-            NavHost(navController = nav, startDestination = "splash") {
+            NavHost(
+                navController = nav,
+                startDestination = "splash",
+                enterTransition = { fadeIn(tween(220)) + slideIntoContainer(SlideDirection.Start, tween(220)) },
+                exitTransition = { fadeOut(tween(180)) + slideOutOfContainer(SlideDirection.Start, tween(180)) },
+                popEnterTransition = { fadeIn(tween(220)) + slideIntoContainer(SlideDirection.End, tween(220)) },
+                popExitTransition = { fadeOut(tween(180)) + slideOutOfContainer(SlideDirection.End, tween(180)) },
+            ) {
                 composable("splash") { Splash(container, nav) }
                 composable("server") { ServerScreen(container, nav) }
                 composable("login") { LoginScreen(container, nav) }

@@ -42,8 +42,12 @@ import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
@@ -53,6 +57,7 @@ import com.mangrove.app.data.DownloadProgress
 import com.mangrove.app.data.DownloadRequest
 import com.mangrove.app.data.DownloadState
 import com.mangrove.app.data.SeriesDetailDto
+import com.mangrove.app.ui.theme.BgDark
 import com.mangrove.app.ui.theme.TealMint
 
 private data class ChapterRow(val chapter: ChapterDto, val volumeNumber: Float)
@@ -133,48 +138,80 @@ fun SeriesScreen(container: AppContainer, nav: NavController, seriesId: Int) {
 
                 LazyColumn(Modifier.fillMaxSize()) {
                     item {
-                        Row(Modifier.fillMaxWidth().padding(16.dp)) {
+                        // Hero header: cover backdrop fading into the page, with the sharp cover + key meta.
+                        Box(Modifier.fillMaxWidth().height(230.dp)) {
+                            if (d.hasCover) {
+                                NetworkImage(
+                                    container,
+                                    "api/series/${d.id}/cover",
+                                    null,
+                                    Modifier.fillMaxSize().alpha(0.4f),
+                                )
+                            }
                             Box(
-                                Modifier
-                                    .width(120.dp)
-                                    .aspectRatio(2f / 3f)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceVariant),
-                                contentAlignment = Alignment.Center,
+                                Modifier.fillMaxSize().background(
+                                    Brush.verticalGradient(listOf(Color.Transparent, BgDark)),
+                                ),
+                            )
+                            Row(
+                                Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(16.dp),
+                                verticalAlignment = Alignment.Bottom,
                             ) {
-                                if (d.hasCover) {
-                                    NetworkImage(container, "api/series/${d.id}/cover", d.name, Modifier.fillMaxSize())
-                                } else {
-                                    Text("No cover", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Box(
+                                    Modifier
+                                        .width(120.dp)
+                                        .aspectRatio(2f / 3f)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (d.hasCover) {
+                                        NetworkImage(container, "api/series/${d.id}/cover", d.name, Modifier.fillMaxSize())
+                                    } else {
+                                        Text("No cover", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                                Column(Modifier.padding(start = 16.dp).weight(1f)) {
+                                    Text(
+                                        d.name,
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 3,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    listOfNotNull(
+                                        d.ageRating?.takeIf { it.isNotBlank() },
+                                        d.language?.takeIf { it.isNotBlank() }?.uppercase(),
+                                        d.publisher?.takeIf { it.isNotBlank() },
+                                    ).takeIf { it.isNotEmpty() }?.let {
+                                        Text(
+                                            it.joinToString(" · "),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.padding(top = 4.dp),
+                                        )
+                                    }
+                                    Text("${rows.size} chapters", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 6.dp))
                                 }
                             }
-                            Column(Modifier.padding(start = 16.dp)) {
-                                listOfNotNull(
-                                    d.ageRating?.takeIf { it.isNotBlank() },
-                                    d.language?.takeIf { it.isNotBlank() }?.uppercase(),
-                                ).takeIf { it.isNotEmpty() }?.let {
-                                    Text(it.joinToString(" · "), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                                d.publisher?.takeIf { it.isNotBlank() }?.let {
-                                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-                                }
-                                listOfNotNull(
-                                    d.writer?.takeIf { it.isNotBlank() }?.let { "Story: $it" },
-                                    d.penciller?.takeIf { it.isNotBlank() }?.let { "Art: $it" },
-                                ).forEach {
-                                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-                                }
-                                d.genres?.takeIf { it.isNotBlank() }?.let {
-                                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-                                }
-                                d.tags?.takeIf { it.isNotBlank() }?.let {
-                                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
-                                }
-                                Text("${rows.size} chapters", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 8.dp))
+                        }
+
+                        Column(Modifier.padding(horizontal = 16.dp)) {
+                            listOfNotNull(
+                                d.writer?.takeIf { it.isNotBlank() }?.let { "Story: $it" },
+                                d.penciller?.takeIf { it.isNotBlank() }?.let { "Art: $it" },
+                            ).forEach {
+                                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 2.dp))
+                            }
+                            d.genres?.takeIf { it.isNotBlank() }?.let {
+                                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                            }
+                            d.tags?.takeIf { it.isNotBlank() }?.let {
+                                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
                             }
                         }
                         d.summary?.takeIf { it.isNotBlank() }?.let {
-                            Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(it, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             SectionTitle("Chapters")

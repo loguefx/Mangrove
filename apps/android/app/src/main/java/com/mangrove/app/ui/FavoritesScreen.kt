@@ -135,6 +135,7 @@ fun FavoritesScreen(container: AppContainer, nav: NavController) {
                             coverPath = if (s.hasCover) "api/series/${s.id}/cover" else null,
                             title = s.name,
                             onClick = { nav.navigate("series/${s.id}") },
+                            overlay = true,
                         )
                         newBySeries[s.id]?.let { UnreadBadge(it.newChapters, Modifier.align(Alignment.TopEnd)) }
                     }
