@@ -59,10 +59,12 @@ export default function ImageReader({
   manifest,
   startPage,
   onExit,
+  onNextChapter,
 }: {
   manifest: ChapterManifestDto;
   startPage: number;
   onExit: () => void;
+  onNextChapter?: () => void;
 }) {
   const { mode, setMode, fit, setFit, dir, setDir } = useReaderPrefs();
   const [showSettings, setShowSettings] = useState(false);
@@ -107,6 +109,7 @@ export default function ImageReader({
           zoom={zoom}
           onToggleChrome={toggleChrome}
           nextChapterId={manifest.nextChapterId ?? null}
+          onNextChapter={onNextChapter}
         />
       </ReaderChrome>
     );
@@ -131,6 +134,7 @@ export default function ImageReader({
       startPage={startPage}
       loadPage={loadPage}
       onExit={onExit}
+      onNextChapter={onNextChapter}
     />
   );
 }
@@ -299,8 +303,10 @@ function Paged(props: {
   startPage: number;
   loadPage: (n: number) => Promise<string | null>;
   onExit: () => void;
+  onNextChapter?: () => void;
 }) {
-  const { manifest, mode, toggleChrome, zoom, setZoom, rtl, startPage, loadPage, onExit } = props;
+  const { manifest, mode, toggleChrome, zoom, setZoom, rtl, startPage, loadPage, onExit, onNextChapter } =
+    props;
   const count = manifest.pageCount;
   const double = mode === "double";
   const spreads = useMemo(() => buildSpreads(count, double), [count, double]);
@@ -349,8 +355,14 @@ function Paged(props: {
   }, [spreadIdx, spreads.length, manifest.nextChapterId]);
 
   const goNext = useCallback(
-    () => setSpreadIdx((i) => (i < spreads.length - 1 ? i + 1 : i)),
-    [spreads.length]
+    () =>
+      setSpreadIdx((i) => {
+        if (i < spreads.length - 1) return i + 1;
+        // On the last page: roll straight into the next chapter if there is one.
+        if (onNextChapter) onNextChapter();
+        return i;
+      }),
+    [spreads.length, onNextChapter]
   );
   const goPrev = useCallback(() => setSpreadIdx((i) => (i > 0 ? i - 1 : i)), []);
 
@@ -417,10 +429,14 @@ function Paged(props: {
           />
           <button
             onClick={goNext}
-            disabled={spreadIdx >= spreads.length - 1}
+            disabled={spreadIdx >= spreads.length - 1 && !onNextChapter}
             className="rounded-lg bg-neutral-800/80 px-4 py-1.5 text-sm text-neutral-200 disabled:opacity-40"
           >
-            {rtl ? "Previous" : "Next"}
+            {spreadIdx >= spreads.length - 1 && onNextChapter
+              ? "Next chapter →"
+              : rtl
+                ? "Previous"
+                : "Next"}
           </button>
         </div>
       }
@@ -462,6 +478,7 @@ function Webtoon({
   zoom,
   onToggleChrome,
   nextChapterId,
+  onNextChapter,
 }: {
   id: number;
   count: number;
@@ -471,6 +488,7 @@ function Webtoon({
   zoom: number;
   onToggleChrome: () => void;
   nextChapterId: number | null;
+  onNextChapter?: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [loaded, setLoaded] = useState<Map<number, string>>(new Map());
@@ -501,12 +519,22 @@ function Webtoon({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadPage, nextChapterId, count]);
 
-  // Persist progress (debounced) based on which page is centered.
+  // Persist progress (debounced) based on which page is centered, and seamlessly roll into the next
+  // chapter once the reader is scrolled to the very bottom of the last page.
+  const advanced = useRef(false);
+  useEffect(() => {
+    advanced.current = false;
+  }, [id]);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
     let timer: number | undefined;
     const onScroll = () => {
+      if (onNextChapter && !advanced.current && el.scrollTop + el.clientHeight >= el.scrollHeight - 4) {
+        advanced.current = true;
+        onNextChapter();
+        return;
+      }
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
         const mid = el.scrollTop + el.clientHeight / 2;
@@ -520,7 +548,7 @@ function Webtoon({
       el.removeEventListener("scroll", onScroll);
       window.clearTimeout(timer);
     };
-  }, [id]);
+  }, [id, onNextChapter]);
 
   // Webtoon zoom widens the strip; the column stays centered and scrolls vertically.
   const imgStyle =

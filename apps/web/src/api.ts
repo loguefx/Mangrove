@@ -35,6 +35,13 @@ export interface UpdateApplyResultDto {
   message: string;
 }
 
+export interface UpdateProgressDto {
+  phase: "idle" | "downloading" | "extracting" | "restarting" | "failed";
+  percent: number;
+  message?: string | null;
+  targetVersion?: string | null;
+}
+
 export interface LibraryPathDto {
   id: number;
   path: string;
@@ -569,6 +576,7 @@ export const api = {
   // ---- Server updates (admin) ----
   updateStatus: () => request<UpdateStatusDto>("/api/admin/update/status"),
   applyUpdate: () => request<UpdateApplyResultDto>("/api/admin/update/apply", { method: "POST" }),
+  updateProgress: () => request<UpdateProgressDto>("/api/admin/update/progress"),
 };
 
 async function authedFetch(path: string): Promise<Response> {

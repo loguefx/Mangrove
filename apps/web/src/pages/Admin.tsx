@@ -7,6 +7,7 @@ import {
   type ServerStatsDto,
   type SettingDto,
   type TaskLogDto,
+  type UpdateProgressDto,
   type UpdateStatusDto,
 } from "../api";
 import { PageHeader } from "../components/SeriesGrid";
@@ -484,6 +485,7 @@ function UpdatesTab() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [progress, setProgress] = useState<UpdateProgressDto | null>(null);
 
   const load = () => {
     setLoading(true);
@@ -500,36 +502,75 @@ function UpdatesTab() {
     if (!window.confirm("Download and install the update now? The server will restart and be briefly unavailable.")) return;
     setBusy(true);
     setMsg(null);
+    setProgress({ phase: "downloading", percent: 0, message: "Starting update…" });
     try {
       const res = await api.applyUpdate();
-      setMsg(res.message);
-      if (res.started) pollForRestart();
+      if (!res.started) {
+        setMsg(res.message);
+        setBusy(false);
+        setProgress(null);
+        return;
+      }
+      pollProgress();
     } catch (e) {
       setMsg(e instanceof Error ? e.message : "Update failed to start.");
-    } finally {
       setBusy(false);
+      setProgress(null);
     }
   };
 
-  // After an update starts, the server goes down then comes back on a new version. Poll until the
-  // reported version changes (or we give up), then refresh the status card.
-  const pollForRestart = () => {
+  // Drive the progress bar: poll the server for download/extract progress, then — once it reports
+  // "restarting" (or stops responding because it's going down) — wait for it to come back on the new
+  // version and reload the page so the new UI/assets take effect.
+  const pollProgress = () => {
     const before = status?.currentVersion;
+    let restarting = false;
     let tries = 0;
     const timer = setInterval(async () => {
       tries++;
-      try {
-        const s = await api.updateStatus();
-        if (s.currentVersion !== before) {
-          clearInterval(timer);
-          setStatus(s);
-          setMsg(`Updated to v${s.currentVersion}.`);
+      if (!restarting) {
+        try {
+          const p = await api.updateProgress();
+          setProgress(p);
+          if (p.phase === "failed") {
+            clearInterval(timer);
+            setMsg(p.message ?? "Update failed.");
+            setBusy(false);
+            setProgress(null);
+            return;
+          }
+          if (p.phase === "restarting") {
+            restarting = true;
+            setProgress({ phase: "restarting", percent: 100, message: "Restarting server…" });
+          }
+        } catch {
+          // Progress endpoint unreachable — the service is most likely restarting now.
+          restarting = true;
+          setProgress({ phase: "restarting", percent: 100, message: "Restarting server…" });
         }
-      } catch {
-        /* server still restarting */
+      } else {
+        try {
+          const s = await api.updateStatus();
+          if (s.currentVersion !== before) {
+            clearInterval(timer);
+            setProgress({
+              phase: "restarting",
+              percent: 100,
+              message: `Updated to v${s.currentVersion}. Reloading…`,
+            });
+            setTimeout(() => window.location.reload(), 1200);
+            return;
+          }
+        } catch {
+          /* still down — keep waiting */
+        }
       }
-      if (tries > 60) clearInterval(timer);
-    }, 5000);
+      if (tries > 240) {
+        clearInterval(timer);
+        setBusy(false);
+        setMsg("Update is taking longer than expected — try refreshing the page.");
+      }
+    }, 800);
   };
 
   if (loading) return <Spinner />;
@@ -571,7 +612,25 @@ function UpdatesTab() {
 
         {status.error && <p className="mt-3 text-sm text-amber-400/80">{status.error}</p>}
 
-        {status.updateAvailable && (
+        {progress && (
+          <div className="mt-4 space-y-2">
+            <div className="flex items-center justify-between text-sm text-neutral-300">
+              <span>{updatePhaseLabel(progress.phase)}</span>
+              {progress.phase === "downloading" && <span>{progress.percent}%</span>}
+            </div>
+            <div className="h-2.5 w-full overflow-hidden rounded-full bg-neutral-800">
+              <div
+                className={`h-full rounded-full bg-teal-mint transition-all duration-300 ${
+                  progress.phase === "downloading" ? "" : "animate-pulse"
+                }`}
+                style={{ width: `${progress.phase === "downloading" ? progress.percent : 100}%` }}
+              />
+            </div>
+            {progress.message && <div className="text-xs text-neutral-500">{progress.message}</div>}
+          </div>
+        )}
+
+        {status.updateAvailable && !progress && (
           <div className="mt-4 flex flex-wrap items-center gap-3">
             {status.canSelfUpdate ? (
               <button
@@ -600,7 +659,7 @@ function UpdatesTab() {
         <div className="mt-4 flex items-center gap-3">
           <button
             onClick={load}
-            disabled={busy}
+            disabled={busy || !!progress}
             className="rounded-xl bg-neutral-800 px-4 py-1.5 text-sm hover:bg-neutral-700 disabled:opacity-50"
           >
             Check for updates
@@ -631,6 +690,21 @@ function UpdatesTab() {
       )}
     </div>
   );
+}
+
+function updatePhaseLabel(phase: UpdateProgressDto["phase"]): string {
+  switch (phase) {
+    case "downloading":
+      return "Downloading update…";
+    case "extracting":
+      return "Extracting files…";
+    case "restarting":
+      return "Restarting server…";
+    case "failed":
+      return "Update failed";
+    default:
+      return "Preparing…";
+  }
 }
 
 function timeAgo(iso: string): string {

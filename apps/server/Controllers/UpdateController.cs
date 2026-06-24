@@ -24,4 +24,7 @@ public sealed class UpdateController : ControllerBase
         var result = await _updates.ApplyAsync(ct);
         return result.Started ? Ok(result) : BadRequest(result);
     }
+
+    [HttpGet("progress")]
+    public ActionResult<UpdateProgressDto> Progress() => Ok(_updates.GetProgress());
 }

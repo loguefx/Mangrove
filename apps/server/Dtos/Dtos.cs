@@ -13,6 +13,7 @@ public sealed record UpdateStatusDto(
     string? PublishedAt,
     string? Error = null);
 public sealed record UpdateApplyResultDto(bool Started, string Message);
+public sealed record UpdateProgressDto(string Phase, int Percent, string? Message, string? TargetVersion);
 
 // ---- Auth ----
 public sealed record RegisterFirstRequest(string Username, string? Email, string Password);

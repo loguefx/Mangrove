@@ -151,10 +151,19 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
                         else -> {
                             val isRight = fraction > 0.5f
                             val forward = if (rtl) !isRight else isRight
-                            val target = (pagerState.currentPage + if (forward) 1 else -1)
-                                .coerceIn(0, m.pageCount - 1)
-                            if (target != pagerState.currentPage) {
-                                scope.launch { pagerState.animateScrollToPage(target) }
+                            val nextId = m.nextChapterId
+                            if (forward && pagerState.currentPage >= m.pageCount - 1 && nextId != null) {
+                                // Seamlessly continue into the next chapter from the last page.
+                                nav.navigate("reader/$nextId") {
+                                    popUpTo("reader/{chapterId}") { inclusive = true }
+                                    launchSingleTop = true
+                                }
+                            } else {
+                                val target = (pagerState.currentPage + if (forward) 1 else -1)
+                                    .coerceIn(0, m.pageCount - 1)
+                                if (target != pagerState.currentPage) {
+                                    scope.launch { pagerState.animateScrollToPage(target) }
+                                }
                             }
                         }
                     }

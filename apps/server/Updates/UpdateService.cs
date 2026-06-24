@@ -23,6 +23,13 @@ public sealed class UpdateService
     private readonly ServerPaths _paths;
     private readonly ILogger<UpdateService> _log;
 
+    // In-memory progress for the currently running self-update, polled by the admin UI.
+    private readonly object _gate = new();
+    private string _phase = "idle"; // idle | downloading | extracting | restarting | failed
+    private int _percent;
+    private string? _progressMessage;
+    private string? _targetVersion;
+
     public UpdateService(IHttpClientFactory http, ServerPaths paths, ILogger<UpdateService> log)
     {
         _http = http;
@@ -32,6 +39,27 @@ public sealed class UpdateService
 
     private static bool CanSelfUpdate =>
         OperatingSystem.IsWindows() && WindowsServiceHelpers.IsWindowsService();
+
+    private void SetProgress(string phase, int percent, string? message)
+    {
+        lock (_gate)
+        {
+            _phase = phase;
+            _percent = Math.Clamp(percent, 0, 100);
+            _progressMessage = message;
+        }
+    }
+
+    public UpdateProgressDto GetProgress()
+    {
+        lock (_gate)
+            return new UpdateProgressDto(_phase, _percent, _progressMessage, _targetVersion);
+    }
+
+    private bool IsRunning
+    {
+        get { lock (_gate) return _phase is "downloading" or "extracting" or "restarting"; }
+    }
 
     public async Task<UpdateStatusDto> GetStatusAsync(CancellationToken ct)
     {
@@ -63,6 +91,9 @@ public sealed class UpdateService
                 "Automatic updates are only available when Mangrove runs as a Windows service. " +
                 "Download the latest release and replace the files manually.");
 
+        if (IsRunning)
+            return new UpdateApplyResultDto(true, "An update is already in progress.");
+
         var release = await FetchLatestReleaseAsync(ct);
         if (release is null)
             return new UpdateApplyResultDto(false, "Could not read the latest release from GitHub.");
@@ -71,21 +102,46 @@ public sealed class UpdateService
         if (string.IsNullOrEmpty(release.AssetUrl))
             return new UpdateApplyResultDto(false, "The latest release has no Windows server download.");
 
-        Directory.CreateDirectory(_paths.UpdatesDir);
-        var zipPath = Path.Combine(_paths.UpdatesDir, $"mangrove-{release.Version}.zip");
-        var stagingDir = Path.Combine(_paths.UpdatesDir, $"staging-{release.Version}");
+        lock (_gate)
+        {
+            _targetVersion = release.Version;
+            _phase = "downloading";
+            _percent = 0;
+            _progressMessage = "Starting download…";
+        }
 
-        _log.LogInformation("Downloading update {Version} from {Url}", release.Version, release.AssetUrl);
-        await DownloadAsync(release.AssetUrl, zipPath, ct);
-
-        if (Directory.Exists(stagingDir)) Directory.Delete(stagingDir, recursive: true);
-        Directory.CreateDirectory(stagingDir);
-        ZipFile.ExtractToDirectory(zipPath, stagingDir, overwriteFiles: true);
-
-        LaunchUpdater(stagingDir);
+        // Run the actual work detached from the request: the HTTP response returns immediately so the
+        // UI can start polling progress, and the work isn't cancelled when the response completes.
+        _ = Task.Run(() => RunUpdateAsync(release), CancellationToken.None);
 
         return new UpdateApplyResultDto(true,
-            $"Update to {release.Version} started. The server will restart in a moment — refresh the page shortly.");
+            $"Update to v{release.Version} started.");
+    }
+
+    private async Task RunUpdateAsync(ReleaseInfo release)
+    {
+        try
+        {
+            Directory.CreateDirectory(_paths.UpdatesDir);
+            var zipPath = Path.Combine(_paths.UpdatesDir, $"mangrove-{release.Version}.zip");
+            var stagingDir = Path.Combine(_paths.UpdatesDir, $"staging-{release.Version}");
+
+            _log.LogInformation("Downloading update {Version} from {Url}", release.Version, release.AssetUrl);
+            await DownloadAsync(release.AssetUrl!, zipPath, CancellationToken.None);
+
+            SetProgress("extracting", 100, "Extracting files…");
+            if (Directory.Exists(stagingDir)) Directory.Delete(stagingDir, recursive: true);
+            Directory.CreateDirectory(stagingDir);
+            ZipFile.ExtractToDirectory(zipPath, stagingDir, overwriteFiles: true);
+
+            SetProgress("restarting", 100, "Restarting server…");
+            LaunchUpdater(stagingDir);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Self-update failed.");
+            SetProgress("failed", 0, "Update failed: " + ex.Message);
+        }
     }
 
     /// <summary>Writes and launches a detached PowerShell script that swaps the binaries and restarts the service.</summary>
@@ -140,8 +196,35 @@ Log 'Update complete'
         var client = CreateClient();
         using var resp = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, ct);
         resp.EnsureSuccessStatusCode();
+
+        var total = resp.Content.Headers.ContentLength;
+        await using var src = await resp.Content.ReadAsStreamAsync(ct);
         await using var fs = File.Create(destination);
-        await resp.Content.CopyToAsync(fs, ct);
+
+        var buffer = new byte[81920];
+        long read = 0;
+        int n;
+        var lastPct = -1;
+        while ((n = await src.ReadAsync(buffer, ct)) > 0)
+        {
+            await fs.WriteAsync(buffer.AsMemory(0, n), ct);
+            read += n;
+            if (total is > 0)
+            {
+                var pct = (int)(read * 100 / total.Value);
+                if (pct != lastPct)
+                {
+                    lastPct = pct;
+                    var mb = read / 1_000_000.0;
+                    var totalMb = total.Value / 1_000_000.0;
+                    SetProgress("downloading", pct, $"Downloading… {mb:0.0} / {totalMb:0.0} MB");
+                }
+            }
+            else
+            {
+                SetProgress("downloading", 0, $"Downloading… {read / 1_000_000.0:0.0} MB");
+            }
+        }
     }
 
     private async Task<ReleaseInfo?> FetchLatestReleaseAsync(CancellationToken ct)
