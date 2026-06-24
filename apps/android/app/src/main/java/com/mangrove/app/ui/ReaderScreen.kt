@@ -44,6 +44,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -206,7 +207,10 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
             IconButton(onClick = { nav.popBackStack() }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
-            Column(Modifier.weight(1f)) {
+            Column(
+                Modifier.weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
                 m.chapterLabel?.takeIf { it.isNotBlank() }?.let {
                     Text(
                         it,
@@ -215,6 +219,7 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
                         fontWeight = FontWeight.Medium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
                     )
                 }
                 Text(
@@ -222,6 +227,7 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
                         if (offline) " · Offline" else "",
                     color = Color(0xFFB0B0B0),
                     style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
                 )
             }
             Box {
