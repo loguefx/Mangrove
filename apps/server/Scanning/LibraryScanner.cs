@@ -24,6 +24,7 @@ public sealed class LibraryScanner
     private readonly EpubService _epub;
     private readonly ServerPaths _paths;
     private readonly FilenameParser _parser;
+    private readonly ScanJobQueue _queue;
     private readonly ILogger<LibraryScanner> _logger;
 
     private const int MaxDepth = 8;
@@ -36,6 +37,7 @@ public sealed class LibraryScanner
         EpubService epub,
         ServerPaths paths,
         FilenameParser parser,
+        ScanJobQueue queue,
         ILogger<LibraryScanner> logger)
     {
         _db = db;
@@ -45,6 +47,7 @@ public sealed class LibraryScanner
         _epub = epub;
         _paths = paths;
         _parser = parser;
+        _queue = queue;
         _logger = logger;
     }
 
@@ -131,12 +134,17 @@ public sealed class LibraryScanner
             : new List<(string Path, IStorageProvider Provider)>
                 { (library.RootPath, _providers.ForLibrary(library, library.Credential)) };
 
+        _queue.SetProgress(libraryId, 0, 0, "Collecting files…");
         var units = new List<ContentUnit>();
         foreach (var (root, prov) in roots)
         {
             if (string.IsNullOrWhiteSpace(root)) continue;
             await CollectUnitsAsync(prov, root, root, 0, units, ct);
         }
+
+        // One smooth bar across the two slow passes (cover/metadata, then per-chapter indexing).
+        var progressDone = 0;
+        var progressTotal = units.Count; // assetDir count added once known, below
 
         // Quick pass: create every series and apply its folder cover + sidecar ComicInfo.xml up
         // front. This is cheap (a directory list + small XML per series) and is saved immediately,
@@ -152,10 +160,12 @@ public sealed class LibraryScanner
             if (!seriesAssetDir.ContainsKey(sName) && TryGetSeriesDir(unit, out var sDir))
                 seriesAssetDir[sName] = (sDir, unit.Provider);
         }
+        progressTotal += seriesAssetDir.Count;
         foreach (var (sName, target) in seriesAssetDir)
         {
             ct.ThrowIfCancellationRequested();
             await TryApplyFolderAssetsAsync(seriesCache[sName], target.Dir, target.Provider, ct);
+            _queue.SetProgress(libraryId, ++progressDone, progressTotal, "Reading covers & metadata…");
         }
 
         var added = 0;
@@ -165,6 +175,7 @@ public sealed class LibraryScanner
         foreach (var unit in units)
         {
             ct.ThrowIfCancellationRequested();
+            _queue.SetProgress(libraryId, ++progressDone, progressTotal, "Indexing chapters…");
             seenPaths.Add(unit.Path);
 
             var hash = ComputeHash(unit);

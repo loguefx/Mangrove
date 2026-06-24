@@ -239,6 +239,8 @@ export interface ChapterManifestDto {
   mediaType: string; // "image" | "epub"
   prevChapterId?: number | null;
   nextChapterId?: number | null;
+  chapterLabel?: string | null;
+  seriesName?: string | null;
 }
 
 export interface EpubSpineItemDto {
@@ -398,9 +400,14 @@ export const api = {
     ),
 
   scanStatus: (id: number) =>
-    request<{ libraryId: number; state: string; queued: boolean }>(
-      `/api/libraries/${id}/scan-status`
-    ),
+    request<{
+      libraryId: number;
+      state: string;
+      queued: boolean;
+      done: number;
+      total: number;
+      phase: string | null;
+    }>(`/api/libraries/${id}/scan-status`),
 
   series: (
     libraryId: number,

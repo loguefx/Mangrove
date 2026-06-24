@@ -8,6 +8,7 @@ import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,6 +22,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,6 +43,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import coil.request.ImageRequest
@@ -202,12 +206,24 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
             IconButton(onClick = { nav.popBackStack() }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Color.White)
             }
-            Text(
-                "Page ${pagerState.currentPage + 1} / ${m.pageCount} · ${if (rtl) "RTL" else "LTR"}" +
-                    if (offline) " · Offline" else "",
-                color = Color.White,
-                modifier = Modifier.weight(1f),
-            )
+            Column(Modifier.weight(1f)) {
+                m.chapterLabel?.takeIf { it.isNotBlank() }?.let {
+                    Text(
+                        it,
+                        color = Color.White,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Text(
+                    "Page ${pagerState.currentPage + 1} / ${m.pageCount} · ${if (rtl) "RTL" else "LTR"}" +
+                        if (offline) " · Offline" else "",
+                    color = Color(0xFFB0B0B0),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             Box {
                 IconButton(onClick = { menuOpen = true }) {
                     Icon(Icons.Filled.Settings, contentDescription = "Reading settings", tint = Color.White)

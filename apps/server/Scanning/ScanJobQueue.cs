@@ -13,6 +13,9 @@ public enum ScanState
 /// <summary>A queued scan and whether it should be recorded in the task history.</summary>
 public readonly record struct ScanRequest(int LibraryId, bool RecordHistory);
 
+/// <summary>Live progress of the running scan. <see cref="Total"/> is 0 while still indeterminate.</summary>
+public readonly record struct ScanProgress(int Done, int Total, string? Phase);
+
 /// <summary>
 /// In-process queue of library scans. Scans run one-at-a-time on a background worker
 /// so the triggering HTTP request returns immediately and the API stays responsive.
@@ -23,6 +26,13 @@ public sealed class ScanJobQueue
     private readonly ConcurrentDictionary<int, byte> _queued = new();
     private readonly object _lock = new();
     private int _running;
+
+    // Progress of the currently running scan, reported by the scanner as it works.
+    private readonly object _progressLock = new();
+    private int _progressLib;
+    private int _done;
+    private int _total;
+    private string? _phase;
 
     public bool Enqueue(int libraryId, bool recordHistory = true)
     {
@@ -45,6 +55,7 @@ public sealed class ScanJobQueue
             _queued.TryRemove(libraryId, out _);
             _running = libraryId;
         }
+        SetProgress(libraryId, 0, 0, "Starting…");
     }
 
     public void MarkDone(int libraryId)
@@ -53,6 +64,33 @@ public sealed class ScanJobQueue
         {
             if (_running == libraryId) _running = 0;
         }
+        lock (_progressLock)
+        {
+            if (_progressLib == libraryId)
+            {
+                _progressLib = 0;
+                _done = _total = 0;
+                _phase = null;
+            }
+        }
+    }
+
+    /// <summary>Reports progress for the running scan; the status endpoint surfaces this to the UI.</summary>
+    public void SetProgress(int libraryId, int done, int total, string? phase)
+    {
+        lock (_progressLock)
+        {
+            _progressLib = libraryId;
+            _done = done;
+            _total = total;
+            _phase = phase;
+        }
+    }
+
+    public ScanProgress GetProgress(int libraryId)
+    {
+        lock (_progressLock)
+            return _progressLib == libraryId ? new ScanProgress(_done, _total, _phase) : default;
     }
 
     public ScanState StateOf(int libraryId)

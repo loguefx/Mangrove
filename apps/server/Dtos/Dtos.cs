@@ -50,8 +50,13 @@ public sealed record LibraryDto(
 
 public sealed record ScanResponse(int FilesSeen, int ChaptersAdded, int ChaptersUpdated, int ChaptersRemoved, int SeriesCount);
 
-/// <summary>Result of queuing a scan. <paramref name="State"/> is one of "queued", "running", "idle".</summary>
-public sealed record ScanStatusDto(int LibraryId, string State, bool Queued);
+/// <summary>
+/// Result of queuing a scan / current scan status. <paramref name="State"/> is one of
+/// "queued", "running", "idle". When a scan is running, <paramref name="Done"/>/<paramref name="Total"/>
+/// describe progress (Total is 0 while still collecting files, i.e. indeterminate).
+/// </summary>
+public sealed record ScanStatusDto(
+    int LibraryId, string State, bool Queued, int Done = 0, int Total = 0, string? Phase = null);
 
 // ---- Storage test ----
 public sealed record StorageTestRequest(
@@ -71,7 +76,7 @@ public sealed record VolumeDto(int Id, float Number, string? Name, IReadOnlyList
 public sealed record ChapterDto(int Id, float Number, string? Title, int PageCount, string FileFormat, bool HasCover);
 
 // ---- Reading ----
-public sealed record ChapterManifestDto(int Id, int PageCount, string ReadingDirection, string Format, string MediaType, int? PrevChapterId = null, int? NextChapterId = null);
+public sealed record ChapterManifestDto(int Id, int PageCount, string ReadingDirection, string Format, string MediaType, int? PrevChapterId = null, int? NextChapterId = null, string? ChapterLabel = null, string? SeriesName = null);
 public sealed record ProgressRequest(int ChapterId, int Page, double? ScrollOffset, bool? IsRead);
 public sealed record ProgressDto(int ChapterId, int Page, double? ScrollOffset, bool IsRead, DateTime UpdatedAt);
 

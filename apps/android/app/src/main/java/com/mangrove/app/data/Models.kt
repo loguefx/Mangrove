@@ -128,6 +128,8 @@ data class ChapterManifestDto(
     val mediaType: String = "image",
     val prevChapterId: Int? = null,
     val nextChapterId: Int? = null,
+    val chapterLabel: String? = null,
+    val seriesName: String? = null,
 )
 
 @Serializable
@@ -203,6 +205,9 @@ data class ScanStatusDto(
     val libraryId: Int = 0,
     val state: String = "idle",
     val queued: Boolean = false,
+    val done: Int = 0,
+    val total: Int = 0,
+    val phase: String? = null,
 )
 
 @Serializable

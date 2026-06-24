@@ -624,7 +624,6 @@ function ReaderChrome({
   footer?: React.ReactNode;
   children: React.ReactNode;
 }) {
-  void manifest;
   return (
     <div className="relative flex h-screen flex-col bg-black">
       {chrome && (
@@ -632,7 +631,12 @@ function ReaderChrome({
         <button onClick={onExit} className="hover:text-teal-mint">
           ← Back
         </button>
-        <span>{label}</span>
+        <div className="flex min-w-0 flex-col items-center px-2 text-center leading-tight">
+          {manifest.chapterLabel && (
+            <span className="max-w-[60vw] truncate font-medium">{manifest.chapterLabel}</span>
+          )}
+          <span className="text-xs text-neutral-400">{label}</span>
+        </div>
         <button onClick={() => setShowSettings(!showSettings)} className="hover:text-teal-mint" aria-label="Settings">
           ⚙ Settings
         </button>

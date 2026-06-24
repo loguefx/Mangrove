@@ -911,12 +911,15 @@ function SettingsTab() {
   );
 }
 
+type ScanInfo = { state: string; done: number; total: number; phase: string | null };
+
 function LibrariesTab() {
   const [libraries, setLibraries] = useState<LibraryDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [scans, setScans] = useState<Record<number, ScanInfo>>({});
 
   const load = () =>
     api.libraries().then(setLibraries).catch(() => setLibraries([])).finally(() => setLoading(false));
@@ -925,8 +928,42 @@ function LibrariesTab() {
     load();
   }, []);
 
+  // Poll scan status for every library so admins get a live progress bar; poll fast while a scan is
+  // running and back off to a slow heartbeat when everything is idle.
+  useEffect(() => {
+    if (libraries.length === 0) return;
+    const ids = libraries.map((l) => l.id);
+    let timer: number;
+    let stopped = false;
+    const tick = async () => {
+      const results = await Promise.all(
+        ids.map((id) =>
+          api
+            .scanStatus(id)
+            .then((s) => [id, s] as const)
+            .catch(() => null)
+        )
+      );
+      if (stopped) return;
+      setScans((prev) => {
+        const next = { ...prev };
+        for (const r of results)
+          if (r) next[r[0]] = { state: r[1].state, done: r[1].done, total: r[1].total, phase: r[1].phase };
+        return next;
+      });
+      const busy = results.some((r) => r && r[1].state !== "idle");
+      timer = window.setTimeout(tick, busy ? 1000 : 5000);
+    };
+    tick();
+    return () => {
+      stopped = true;
+      window.clearTimeout(timer);
+    };
+  }, [libraries]);
+
   const scan = async (id: number) => {
     try {
+      setScans((prev) => ({ ...prev, [id]: { state: "queued", done: 0, total: 0, phase: null } }));
       await api.scanLibrary(id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Scan failed");
@@ -964,7 +1001,10 @@ function LibrariesTab() {
       </div>
 
       <div className="space-y-3">
-        {libraries.map((lib) => (
+        {libraries.map((lib) => {
+          const st = scans[lib.id];
+          const busy = !!st && st.state !== "idle";
+          return (
           <div key={lib.id} className="rounded-2xl border border-neutral-800 bg-neutral-900/40 p-4">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -977,9 +1017,10 @@ function LibrariesTab() {
               <div className="flex shrink-0 gap-2">
                 <button
                   onClick={() => scan(lib.id)}
-                  className="rounded-lg bg-neutral-800 px-3 py-1.5 text-sm text-neutral-200 hover:bg-neutral-700"
+                  disabled={busy}
+                  className="rounded-lg bg-neutral-800 px-3 py-1.5 text-sm text-neutral-200 hover:bg-neutral-700 disabled:opacity-50"
                 >
-                  Scan
+                  {busy ? "Scanning…" : "Scan"}
                 </button>
                 <button
                   onClick={() => setEditId(lib.id)}
@@ -1002,8 +1043,31 @@ function LibrariesTab() {
                 </li>
               ))}
             </ul>
+            {busy && (
+              <div className="mt-3">
+                <div className="mb-1 flex items-center justify-between text-xs text-neutral-400">
+                  <span>{st.state === "queued" ? "Queued…" : st.phase ?? "Scanning…"}</span>
+                  {st.total > 0 && (
+                    <span>
+                      {st.done}/{st.total}
+                    </span>
+                  )}
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-neutral-800">
+                  {st.total > 0 ? (
+                    <div
+                      className="h-full rounded-full bg-teal-mint transition-all duration-300"
+                      style={{ width: `${Math.min(100, Math.round((st.done / st.total) * 100))}%` }}
+                    />
+                  ) : (
+                    <div className="h-full w-1/3 animate-pulse rounded-full bg-teal-mint" />
+                  )}
+                </div>
+              </div>
+            )}
           </div>
-        ))}
+          );
+        })}
         {libraries.length === 0 && (
           <p className="text-sm text-neutral-500">No libraries yet. Add one to get started.</p>
         )}

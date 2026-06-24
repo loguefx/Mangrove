@@ -25,6 +25,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -34,6 +35,7 @@ import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -58,6 +60,7 @@ import com.mangrove.app.data.CreateCredentialRequest
 import com.mangrove.app.data.CreateLibraryRequest
 import com.mangrove.app.data.CreateUserRequest
 import com.mangrove.app.data.LibraryDto
+import com.mangrove.app.data.ScanStatusDto
 import com.mangrove.app.data.SettingDto
 import com.mangrove.app.data.StorageTestRequest
 import com.mangrove.app.data.UpdateLibraryRequest
@@ -66,6 +69,7 @@ import com.mangrove.app.ui.theme.BgDark
 import com.mangrove.app.ui.theme.Teal
 import com.mangrove.app.ui.theme.TealDeep
 import com.mangrove.app.ui.theme.TealMint
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private val ROLES = listOf("Admin", "User", "ReadOnly")
@@ -388,6 +392,7 @@ private fun AdminLibrariesTab(container: AppContainer) {
     var editing by remember { mutableStateOf<LibraryDto?>(null) }
     var adding by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    var scans by remember { mutableStateOf<Map<Int, ScanStatusDto>>(emptyMap()) }
     val scope = rememberCoroutineScope()
 
     suspend fun reload() {
@@ -396,6 +401,20 @@ private fun AdminLibrariesTab(container: AppContainer) {
     }
 
     LaunchedRefresh { reload() }
+
+    // Poll scan status so the admin sees a live progress bar; fast while scanning, slow when idle.
+    LaunchedEffect(libraries) {
+        if (libraries.isEmpty()) return@LaunchedEffect
+        val ids = libraries.map { it.id }
+        while (true) {
+            val updated = ids.mapNotNull { id ->
+                runCatching { container.scanStatus(id) }.getOrNull()?.let { id to it }
+            }.toMap()
+            if (updated.isNotEmpty()) scans = scans + updated
+            val busy = updated.values.any { it.state != "idle" }
+            delay(if (busy) 1000 else 5000)
+        }
+    }
 
     if (loading) {
         LoadingBox()
@@ -415,6 +434,8 @@ private fun AdminLibrariesTab(container: AppContainer) {
 
         libraries.forEach { lib ->
             val folders = if (lib.paths.isNotEmpty()) lib.paths.map { it.path } else listOf(lib.rootPath)
+            val st = scans[lib.id]
+            val busy = st != null && st.state != "idle"
             Card {
                 Text(lib.name, fontWeight = FontWeight.SemiBold)
                 Text(
@@ -440,9 +461,13 @@ private fun AdminLibrariesTab(container: AppContainer) {
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
-                        onClick = { scope.launch { runCatching { container.scanLibrary(lib.id) } } },
+                        enabled = !busy,
+                        onClick = {
+                            scans = scans + (lib.id to ScanStatusDto(lib.id, "queued"))
+                            scope.launch { runCatching { container.scanLibrary(lib.id) } }
+                        },
                         shape = RoundedCornerShape(10.dp),
-                    ) { Text("Scan") }
+                    ) { Text(if (busy) "Scanning…" else "Scan") }
                     OutlinedButton(onClick = { editing = lib }, shape = RoundedCornerShape(10.dp)) { Text("Edit") }
                     OutlinedButton(
                         onClick = {
@@ -454,6 +479,35 @@ private fun AdminLibrariesTab(container: AppContainer) {
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
                     ) { Text("Delete") }
+                }
+                if (busy && st != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            if (st.state == "queued") "Queued…" else (st.phase ?: "Scanning…"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (st.total > 0) {
+                            Text(
+                                "${st.done}/${st.total}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    if (st.total > 0) {
+                        LinearProgressIndicator(
+                            progress = { st.done.toFloat() / st.total.toFloat() },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    } else {
+                        LinearProgressIndicator(Modifier.fillMaxWidth())
+                    }
                 }
             }
         }

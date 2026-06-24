@@ -124,6 +124,9 @@ interface MangroveApi {
     @POST("api/libraries/{id}/scan")
     suspend fun scanLibrary(@Path("id") id: Int): ScanStatusDto
 
+    @GET("api/libraries/{id}/scan-status")
+    suspend fun scanStatus(@Path("id") id: Int): ScanStatusDto
+
     @POST("api/credentials")
     suspend fun createCredential(@Body body: CreateCredentialRequest): CredentialDto
 

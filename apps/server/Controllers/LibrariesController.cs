@@ -140,7 +140,8 @@ public sealed class LibrariesController : ControllerBase
         if (!await _db.Libraries.AnyAsync(l => l.Id == id, ct)) return NotFound();
         var queued = _scanQueue.Enqueue(id);
         var state = _scanQueue.StateOf(id);
-        return Accepted(new ScanStatusDto(id, StateName(state), queued));
+        var p = _scanQueue.GetProgress(id);
+        return Accepted(new ScanStatusDto(id, StateName(state), queued, p.Done, p.Total, p.Phase));
     }
 
     [HttpGet("{id:int}/scan-status")]
@@ -148,7 +149,8 @@ public sealed class LibrariesController : ControllerBase
     public ActionResult<ScanStatusDto> ScanStatus(int id)
     {
         var state = _scanQueue.StateOf(id);
-        return Ok(new ScanStatusDto(id, StateName(state), state != ScanState.Idle));
+        var p = _scanQueue.GetProgress(id);
+        return Ok(new ScanStatusDto(id, StateName(state), state != ScanState.Idle, p.Done, p.Total, p.Phase));
     }
 
     private static string StateName(ScanState s) => s switch

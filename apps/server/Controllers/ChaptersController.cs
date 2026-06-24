@@ -56,8 +56,26 @@ public sealed class ChaptersController : ControllerBase
         int? prevId = idx > 0 ? ordered[idx - 1] : null;
         int? nextId = idx >= 0 && idx < ordered.Count - 1 ? ordered[idx + 1] : null;
 
-        return Ok(new ChapterManifestDto(chapter.Id, chapter.PageCount, direction, chapter.FileFormat, mediaType, prevId, nextId));
+        return Ok(new ChapterManifestDto(
+            chapter.Id, chapter.PageCount, direction, chapter.FileFormat, mediaType, prevId, nextId,
+            BuildChapterLabel(chapter), chapter.Volume.Series.Name));
     }
+
+    /// <summary>A short human label for the reader overlay, e.g. "Vol. 1 Ch. 5" or a special's title.</summary>
+    private static string BuildChapterLabel(Chapter c)
+    {
+        var parts = new List<string>();
+        if (c.Volume.Number > 0) parts.Add($"Vol. {Fmt(c.Volume.Number)}");
+        if (c.Number > 0) parts.Add($"Ch. {Fmt(c.Number)}");
+        var label = string.Join(" ", parts);
+        if (string.IsNullOrEmpty(label))
+            return string.IsNullOrWhiteSpace(c.Title) ? "Chapter" : c.Title!;
+        if (!string.IsNullOrWhiteSpace(c.Title)) label += $" · {c.Title}";
+        return label;
+    }
+
+    private static string Fmt(float n) =>
+        n.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
 
     [HttpGet("{id:int}/cover")]
     [AllowAnonymous]

@@ -160,6 +160,8 @@ class AppContainer(context: Context) {
     suspend fun updateLibrary(id: Int, body: UpdateLibraryRequest) = requireBackend().api.updateLibrary(id, body)
     suspend fun deleteLibrary(id: Int) = requireBackend().api.deleteLibrary(id)
     suspend fun scanLibrary(id: Int) = requireBackend().api.scanLibrary(id)
+
+    suspend fun scanStatus(id: Int) = requireBackend().api.scanStatus(id)
     suspend fun createCredential(body: CreateCredentialRequest) = requireBackend().api.createCredential(body)
     suspend fun testStorage(body: StorageTestRequest) = requireBackend().api.testStorage(body)
 
