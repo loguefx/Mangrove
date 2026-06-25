@@ -25,6 +25,9 @@ public sealed class SettingsController : ControllerBase
         // scan. Scans are incremental (unchanged files are skipped), so this is cheap after the first run.
         // 0 disables automatic scanning. Values below 5 are treated as 5 to protect the storage backend.
         ["scan.intervalMinutes"] = "15",
+        // Backup metadata: when a series has no folder.jpg cover and no ComicInfo.xml, look up its
+        // summary, cover, genres and author from AniList automatically (Jellyfin-style).
+        ["metadata.online.enabled"] = "true",
     };
 
     [HttpGet]

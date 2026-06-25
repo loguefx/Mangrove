@@ -61,6 +61,8 @@ builder.Services.AddSingleton<ReaderService>();
 builder.Services.AddSingleton<FilenameParser>();
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<Mangrove.Server.Updates.UpdateService>();
+builder.Services.AddSingleton<Mangrove.Server.Metadata.AniListMetadataService>();
+builder.Services.AddScoped<LibrarySidecarWriter>();
 
 // Quiet EF's per-statement SQL logging — at Info it floods the console and badly slows large scans.
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);

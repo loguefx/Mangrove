@@ -17,19 +17,19 @@ public sealed class SeriesController : ControllerBase
     private readonly MangroveDbContext _db;
     private readonly AccessService _access;
     private readonly ServerPaths _paths;
-    private readonly StorageProviderFactory _providers;
+    private readonly LibrarySidecarWriter _sidecar;
     private readonly ILogger<SeriesController> _logger;
     public SeriesController(
         MangroveDbContext db,
         AccessService access,
         ServerPaths paths,
-        StorageProviderFactory providers,
+        LibrarySidecarWriter sidecar,
         ILogger<SeriesController> logger)
     {
         _db = db;
         _access = access;
         _paths = paths;
-        _providers = providers;
+        _sidecar = sidecar;
         _logger = logger;
     }
 
@@ -67,6 +67,10 @@ public sealed class SeriesController : ControllerBase
         series.MetadataLocked = true; // user edits win over future scans (spec §8)
         series.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+
+        // Persist the corrected metadata back into the library so it replaces any cached ComicInfo.xml
+        // and survives re-scans / DB resets (best-effort; read-only shares are simply skipped).
+        await _sidecar.WriteComicInfoAsync(series, ct);
 
         return Ok(await BuildDetailAsync(series, User.GetUserId() ?? 0, ct));
     }
@@ -128,70 +132,10 @@ public sealed class SeriesController : ControllerBase
         await _db.SaveChangesAsync(ct);
 
         // 2) Best-effort write of folder.jpg back to the library so the cover is permanent.
-        var savedToLibrary = await TryWriteFolderJpgAsync(series, resized, ct);
+        var savedToLibrary = await _sidecar.WriteCoverAsync(series, resized, ct);
         Response.Headers["X-Cover-Saved-To-Library"] = savedToLibrary ? "true" : "false";
 
         return Ok(await BuildDetailAsync(series, User.GetUserId() ?? 0, ct));
-    }
-
-    /// <summary>
-    /// Writes the cover bytes as <c>folder.jpg</c> into the series' folder on its library. Returns
-    /// false (and logs) on any failure instead of throwing, since the local cover cache is already
-    /// updated by the time this runs.
-    /// </summary>
-    private async Task<bool> TryWriteFolderJpgAsync(Series series, byte[] jpeg, CancellationToken ct)
-    {
-        try
-        {
-            var library = await _db.Libraries
-                .Include(l => l.Paths).ThenInclude(p => p.Credential)
-                .Include(l => l.Credential)
-                .FirstOrDefaultAsync(l => l.Id == series.LibraryId, ct);
-            if (library is null) return false;
-
-            var storagePath = await _db.MangaFiles
-                .Where(f => f.Chapter.Volume.SeriesId == series.Id)
-                .Select(f => f.StoragePath)
-                .FirstOrDefaultAsync(ct);
-            if (string.IsNullOrEmpty(storagePath)) return false;
-
-            // Find which configured root contains this file (and that root's credential).
-            var roots = library.Paths.Count > 0
-                ? library.Paths.Select(p => (Path: p.Path, Cred: p.Credential ?? library.Credential))
-                : new[] { (Path: library.RootPath, Cred: library.Credential) }.AsEnumerable();
-
-            (string Path, Credential? Cred)? match = null;
-            foreach (var r in roots)
-            {
-                if (string.IsNullOrEmpty(r.Path)) continue;
-                var norm = r.Path.Replace('/', '\\').TrimEnd('\\');
-                if (storagePath.Replace('/', '\\').StartsWith(norm, StringComparison.OrdinalIgnoreCase))
-                {
-                    if (match is null || norm.Length > match.Value.Path.Replace('/', '\\').TrimEnd('\\').Length)
-                        match = (r.Path, r.Cred);
-                }
-            }
-            if (match is null) return false;
-
-            // Series folder = root + first path segment of the file relative to that root.
-            var rootNorm = match.Value.Path.Replace('/', '\\').TrimEnd('\\');
-            var full = storagePath.Replace('/', '\\');
-            var rel = full.StartsWith(rootNorm, StringComparison.OrdinalIgnoreCase) ? full[rootNorm.Length..] : full;
-            var segments = rel.Split('\\', StringSplitOptions.RemoveEmptyEntries);
-            if (segments.Length < 2) return false; // loose file directly in root: no series folder
-            var seriesDir = $"{rootNorm}\\{segments[0]}";
-
-            var provider = _providers.ForLibrary(library, match.Value.Cred);
-            var target = $"{seriesDir}\\folder.jpg";
-            await provider.WriteAsync(target, jpeg, ct);
-            _logger.LogInformation("Saved uploaded cover to library at {Path}", target);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Could not write folder.jpg to library for series {Id}", series.Id);
-            return false;
-        }
     }
 
     private async Task<SeriesDetailDto> BuildDetailAsync(Series series, int userId, CancellationToken ct)

@@ -839,6 +839,11 @@ const SETTING_META: Record<string, SettingMeta> = {
     help: "Run a scan shortly after the server starts.",
     kind: "bool",
   },
+  "metadata.online.enabled": {
+    label: "Online metadata backup",
+    help: "When a series has no folder.jpg cover or ComicInfo.xml, fetch its summary, cover, genres and author automatically from AniList.",
+    kind: "bool",
+  },
   "opds.enabled": { label: "Enable OPDS feed", kind: "bool" },
   "server.baseUrl": { label: "Public base URL", help: "Used for OPDS/links when behind a proxy.", kind: "text" },
   "theme.default": { label: "Default theme", kind: "text" },

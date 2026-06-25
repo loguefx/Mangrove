@@ -1,4 +1,5 @@
 using System.IO.Compression;
+using System.Net.Http;
 using Mangrove.Server;
 using Mangrove.Server.Data;
 using Mangrove.Server.Readers;
@@ -51,9 +52,26 @@ public class LibraryScannerTests : IDisposable
         var pool = new SmbConnectionPool(NullLogger<SmbConnectionPool>.Instance);
         var factory = new StorageProviderFactory(pool, protector);
         var readers = new ReaderService(
-            new ArchiveReader(), new ImageFolderReader(), new PdfPageReader(), new EpubService());
+            new ArchiveReader(), new ArchiveCache(), new ImageFolderReader(), new PdfPageReader(), new EpubService());
+
+        // Keep scans hermetic: disable the online metadata backup so tests never hit the network.
+        if (!_db.AppSettings.Any(s => s.Key == "metadata.online.enabled"))
+        {
+            _db.AppSettings.Add(new AppSetting { Key = "metadata.online.enabled", Value = "false" });
+            _db.SaveChanges();
+        }
+        var online = new Mangrove.Server.Metadata.AniListMetadataService(
+            new StubHttpClientFactory(),
+            NullLogger<Mangrove.Server.Metadata.AniListMetadataService>.Instance);
+        var sidecar = new LibrarySidecarWriter(_db, factory, NullLogger<LibrarySidecarWriter>.Instance);
         return new LibraryScanner(_db, factory, readers, new ComicInfoReader(), new EpubService(),
-            paths, new FilenameParser(), NullLogger<LibraryScanner>.Instance);
+            paths, new FilenameParser(), new ScanJobQueue(), online, sidecar,
+            NullLogger<LibraryScanner>.Instance);
+    }
+
+    private sealed class StubHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new();
     }
 
     private void CreateCbz(string seriesFolder, string fileName, int pageCount)

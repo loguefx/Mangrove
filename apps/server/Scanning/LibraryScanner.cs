@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Mangrove.Server.Data;
+using Mangrove.Server.Metadata;
 using Mangrove.Server.Readers;
 using Mangrove.Server.Storage;
 using Microsoft.EntityFrameworkCore;
@@ -25,6 +26,8 @@ public sealed class LibraryScanner
     private readonly ServerPaths _paths;
     private readonly FilenameParser _parser;
     private readonly ScanJobQueue _queue;
+    private readonly Metadata.AniListMetadataService _online;
+    private readonly LibrarySidecarWriter _sidecar;
     private readonly ILogger<LibraryScanner> _logger;
 
     private const int MaxDepth = 8;
@@ -38,6 +41,8 @@ public sealed class LibraryScanner
         ServerPaths paths,
         FilenameParser parser,
         ScanJobQueue queue,
+        Metadata.AniListMetadataService online,
+        LibrarySidecarWriter sidecar,
         ILogger<LibraryScanner> logger)
     {
         _db = db;
@@ -48,6 +53,8 @@ public sealed class LibraryScanner
         _paths = paths;
         _parser = parser;
         _queue = queue;
+        _online = online;
+        _sidecar = sidecar;
         _logger = logger;
     }
 
@@ -241,6 +248,10 @@ public sealed class LibraryScanner
         }
 
         var removed = await RemoveMissingAsync(library.Id, seenPaths, ct);
+
+        // Backup metadata: for series still missing a cover/summary after local sources, pull from an
+        // online provider (Jellyfin-style). Cached per series so it isn't re-queried every scan.
+        await ApplyOnlineMetadataAsync(libraryId, seriesCache.Values, ct);
 
         library.LastScanAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
@@ -598,6 +609,141 @@ public sealed class LibraryScanner
         {
             _logger.LogWarning(ex, "Failed to read metadata for '{Path}'", unit.Path);
         }
+    }
+
+    private sealed class ExternalIdsModel
+    {
+        public int? anilist { get; set; }
+        public string? autoCheckedAt { get; set; }
+    }
+
+    /// <summary>
+    /// Final scan pass: for any series that still lacks a cover, summary, or genres after local
+    /// sources (folder.jpg / ComicInfo.xml), fetch metadata from the online provider and fill the
+    /// gaps. Only empty fields are touched, user-locked series are skipped, and results are cached in
+    /// <see cref="Series.ExternalIds"/> so subsequent scans don't re-query.
+    /// </summary>
+    private async Task ApplyOnlineMetadataAsync(int libraryId, IEnumerable<Series> seriesList, CancellationToken ct)
+    {
+        if (!await OnlineEnabledAsync(ct)) return;
+
+        var pending = seriesList.Where(s => !s.MetadataLocked && NeedsOnline(s) && !AlreadyChecked(s)).ToList();
+        if (pending.Count == 0) return;
+
+        var done = 0;
+        foreach (var series in pending)
+        {
+            ct.ThrowIfCancellationRequested();
+            _queue.SetProgress(libraryId, ++done, pending.Count, "Fetching metadata online…");
+
+            OnlineSeriesMetadata? meta;
+            try
+            {
+                meta = await _online.FetchAsync(series.Name, ct);
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Online metadata lookup failed for '{Series}'", series.Name);
+                continue;
+            }
+
+            if (meta is null)
+            {
+                MarkChecked(series, null); // remember the miss so we don't hammer the API each scan
+                await _db.SaveChangesAsync(ct);
+                continue;
+            }
+
+            if (string.IsNullOrEmpty(series.Summary) && !string.IsNullOrWhiteSpace(meta.Summary))
+                series.Summary = meta.Summary;
+            if (string.IsNullOrEmpty(series.Genres) && !string.IsNullOrWhiteSpace(meta.Genres))
+                series.Genres = meta.Genres;
+            if (string.IsNullOrEmpty(series.Tags) && !string.IsNullOrWhiteSpace(meta.Tags))
+                series.Tags = meta.Tags;
+            if (string.IsNullOrEmpty(series.AgeRating) && !string.IsNullOrWhiteSpace(meta.AgeRating))
+            {
+                series.AgeRating = meta.AgeRating;
+                series.AgeRatingTier = AgeRatingMap.Tier(meta.AgeRating);
+            }
+            if (string.IsNullOrEmpty(series.People) && (meta.Writer is not null || meta.Penciller is not null))
+                series.People = JsonSerializer.Serialize(new { writer = meta.Writer, penciller = meta.Penciller });
+
+            byte[]? coverJpeg = null;
+            if (!HasCover(series) && !string.IsNullOrWhiteSpace(meta.CoverUrl))
+                coverJpeg = await TryApplyOnlineCoverAsync(series, meta.CoverUrl!, ct);
+
+            MarkChecked(series, meta.AniListId);
+            series.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+
+            // Persist the fetched metadata back into the library as sidecars so it acts as a permanent
+            // cache: folder.jpg becomes the cover, ComicInfo.xml carries the text fields. Both are what
+            // the scanner reads first, so the data survives re-scans and DB resets.
+            if (coverJpeg is not null) await _sidecar.WriteCoverAsync(series, coverJpeg, ct);
+            await _sidecar.WriteComicInfoAsync(series, ct);
+        }
+
+        _logger.LogInformation("Online metadata: filled gaps for up to {Count} series in library {Id}.", pending.Count, libraryId);
+    }
+
+    /// <summary>Downloads + caches the online cover locally, returning the resized JPEG bytes (or null).</summary>
+    private async Task<byte[]?> TryApplyOnlineCoverAsync(Series series, string url, CancellationToken ct)
+    {
+        var raw = await _online.DownloadImageAsync(url, ct);
+        if (raw is null) return null;
+        try
+        {
+            var resized = ImageHelper.ResizeCover(raw);
+            var path = _paths.CoverFileForSeries(series.Id);
+            await File.WriteAllBytesAsync(path, resized, ct);
+            series.CoverPath = path;
+            return resized;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to save online cover for series '{Series}'", series.Name);
+            return null;
+        }
+    }
+
+    private static bool HasCover(Series s) => !string.IsNullOrEmpty(s.CoverPath) && File.Exists(s.CoverPath);
+
+    private static bool NeedsOnline(Series s) =>
+        string.IsNullOrEmpty(s.Summary) || string.IsNullOrEmpty(s.Genres) || !HasCover(s);
+
+    /// <summary>True if we've already matched this series, or recently looked it up and found nothing.</summary>
+    private static bool AlreadyChecked(Series s)
+    {
+        var model = ParseExternal(s.ExternalIds);
+        if (model.anilist is > 0) return true;
+        if (DateTime.TryParse(model.autoCheckedAt, out var when))
+            return DateTime.UtcNow - when.ToUniversalTime() < TimeSpan.FromDays(30);
+        return false;
+    }
+
+    private static void MarkChecked(Series s, int? anilistId)
+    {
+        var model = ParseExternal(s.ExternalIds);
+        if (anilistId is > 0) model.anilist = anilistId;
+        else model.autoCheckedAt = DateTime.UtcNow.ToString("o");
+        s.ExternalIds = JsonSerializer.Serialize(model);
+    }
+
+    private static ExternalIdsModel ParseExternal(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new ExternalIdsModel();
+        try { return JsonSerializer.Deserialize<ExternalIdsModel>(json) ?? new ExternalIdsModel(); }
+        catch { return new ExternalIdsModel(); }
+    }
+
+    private async Task<bool> OnlineEnabledAsync(CancellationToken ct)
+    {
+        var raw = await _db.AppSettings
+            .Where(s => s.Key == "metadata.online.enabled")
+            .Select(s => s.Value)
+            .FirstOrDefaultAsync(ct);
+        return raw is null || !bool.TryParse(raw, out var b) || b; // default on
     }
 
     private async Task<int> RemoveMissingAsync(int libraryId, HashSet<string> seenPaths, CancellationToken ct)
