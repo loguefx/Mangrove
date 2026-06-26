@@ -231,6 +231,15 @@ export interface ActivityDto {
   updatedAt: string;
 }
 
+export interface OnlineCandidate {
+  aniListId: number;
+  title: string;
+  year: number | null;
+  format: string | null;
+  coverUrl: string | null;
+  description: string | null;
+}
+
 export interface ChapterManifestDto {
   id: number;
   pageCount: number;
@@ -495,6 +504,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ url }),
     }),
+
+  identifySeries: (id: number, opts: { name?: string; anilistId?: number }) => {
+    const p = new URLSearchParams();
+    if (opts.name) p.set("name", opts.name);
+    if (opts.anilistId) p.set("anilistId", String(opts.anilistId));
+    const qs = p.toString();
+    return request<OnlineCandidate[]>(`/api/series/${id}/identify${qs ? `?${qs}` : ""}`);
+  },
+
+  applyIdentify: (id: number, anilistId: number) =>
+    request<SeriesDetailDto>(`/api/series/${id}/identify/${anilistId}`, { method: "POST" }),
 
   testStorage: (body: {
     storageKind: number;

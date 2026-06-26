@@ -17,6 +17,15 @@ public sealed record OnlineSeriesMetadata(
     string? AgeRating,
     string? CoverUrl);
 
+/// <summary>A single search result shown in the "Identify" picker.</summary>
+public sealed record OnlineMetadataCandidate(
+    int AniListId,
+    string Title,
+    int? Year,
+    string? Format,
+    string? CoverUrl,
+    string? Description);
+
 /// <summary>
 /// Looks up series metadata from AniList's public GraphQL API (no API key required). This gives
 /// Jellyfin-style automatic metadata for libraries that don't ship their own covers/ComicInfo.xml.
@@ -32,18 +41,27 @@ public sealed class AniListMetadataService
     private readonly SemaphoreSlim _gate = new(1, 1);
     private DateTime _nextAllowedUtc = DateTime.MinValue;
 
-    private const string Query = @"
-query ($search: String) {
-  Media(search: $search, type: MANGA) {
+    // Shared field selection so search-by-name, search-many and lookup-by-id all return the same shape.
+    private const string MediaFields = @"
     id
     description(asHtml: false)
     genres
     isAdult
-    coverImage { extraLarge large }
+    format
+    startDate { year }
+    title { romaji english }
+    coverImage { extraLarge large medium }
     tags { name rank isMediaSpoiler isGeneralSpoiler }
-    staff { edges { role node { name { full } } } }
-  }
-}";
+    staff { edges { role node { name { full } } } }";
+
+    private static readonly string SearchOneQuery =
+        $"query ($search: String) {{ Media(search: $search, type: MANGA) {{ {MediaFields} }} }}";
+
+    private static readonly string SearchManyQuery =
+        $"query ($search: String) {{ Page(perPage: 12) {{ media(search: $search, type: MANGA) {{ {MediaFields} }} }} }}";
+
+    private static readonly string ByIdQuery =
+        $"query ($id: Int) {{ Media(id: $id, type: MANGA) {{ {MediaFields} }} }}";
 
     private readonly IHttpClientFactory _http;
     private readonly ILogger<AniListMetadataService> _log;
@@ -58,17 +76,8 @@ query ($search: String) {
     {
         if (string.IsNullOrWhiteSpace(seriesName)) return null;
 
-        string json;
-        try
-        {
-            json = await PostAsync(seriesName, ct);
-        }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "AniList lookup failed for '{Series}'", seriesName);
-            return null;
-        }
+        var json = await TryPostAsync(SearchOneQuery, new { search = seriesName }, $"name '{seriesName}'", ct);
+        if (json is null) return null;
 
         try
         {
@@ -81,6 +90,89 @@ query ($search: String) {
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Failed to parse AniList response for '{Series}'", seriesName);
+            return null;
+        }
+    }
+
+    /// <summary>Full metadata for a specific AniList id (used when an admin picks an "Identify" result).</summary>
+    public async Task<OnlineSeriesMetadata?> FetchByIdAsync(int anilistId, CancellationToken ct)
+    {
+        if (anilistId <= 0) return null;
+        var json = await TryPostAsync(ByIdQuery, new { id = anilistId }, $"id {anilistId}", ct);
+        if (json is null) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("data", out var data)) return null;
+            if (!data.TryGetProperty("Media", out var media) || media.ValueKind != JsonValueKind.Object)
+                return null;
+            return Map(media);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Failed to parse AniList by-id response for {Id}", anilistId);
+            return null;
+        }
+    }
+
+    /// <summary>A single candidate looked up directly by AniList id (for the "Identify" picker).</summary>
+    public async Task<OnlineMetadataCandidate?> GetCandidateAsync(int anilistId, CancellationToken ct)
+    {
+        if (anilistId <= 0) return null;
+        var json = await TryPostAsync(ByIdQuery, new { id = anilistId }, $"id {anilistId}", ct);
+        if (json is null) return null;
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("data", out var data)) return null;
+            if (!data.TryGetProperty("Media", out var media) || media.ValueKind != JsonValueKind.Object) return null;
+            return MapCandidate(media);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Failed to parse AniList candidate for id {Id}", anilistId);
+            return null;
+        }
+    }
+
+    /// <summary>Returns up to a dozen candidate matches for the "Identify" picker.</summary>
+    public async Task<IReadOnlyList<OnlineMetadataCandidate>> SearchAsync(string query, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(query)) return Array.Empty<OnlineMetadataCandidate>();
+
+        var json = await TryPostAsync(SearchManyQuery, new { search = query }, $"search '{query}'", ct);
+        if (json is null) return Array.Empty<OnlineMetadataCandidate>();
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (!doc.RootElement.TryGetProperty("data", out var data)) return Array.Empty<OnlineMetadataCandidate>();
+            if (!data.TryGetProperty("Page", out var page) || !page.TryGetProperty("media", out var list)
+                || list.ValueKind != JsonValueKind.Array)
+                return Array.Empty<OnlineMetadataCandidate>();
+
+            var results = new List<OnlineMetadataCandidate>();
+            foreach (var media in list.EnumerateArray())
+                results.Add(MapCandidate(media));
+            return results;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Failed to parse AniList search response for '{Query}'", query);
+            return Array.Empty<OnlineMetadataCandidate>();
+        }
+    }
+
+    private async Task<string?> TryPostAsync(string query, object variables, string what, CancellationToken ct)
+    {
+        try
+        {
+            return await PostAsync(query, variables, ct);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "AniList lookup failed for {What}", what);
             return null;
         }
     }
@@ -102,7 +194,7 @@ query ($search: String) {
         }
     }
 
-    private async Task<string> PostAsync(string seriesName, CancellationToken ct)
+    private async Task<string> PostAsync(string query, object variables, CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
         try
@@ -113,7 +205,7 @@ query ($search: String) {
             var client = _http.CreateClient();
             client.Timeout = TimeSpan.FromSeconds(20);
 
-            var payload = JsonSerializer.Serialize(new { query = Query, variables = new { search = seriesName } });
+            var payload = JsonSerializer.Serialize(new { query, variables });
             using var req = new HttpRequestMessage(HttpMethod.Post, Endpoint)
             {
                 Content = new StringContent(payload, Encoding.UTF8, "application/json"),
@@ -139,6 +231,37 @@ query ($search: String) {
             _gate.Release();
         }
     }
+
+    private static OnlineMetadataCandidate MapCandidate(JsonElement media)
+    {
+        int id = media.TryGetProperty("id", out var idEl) && idEl.TryGetInt32(out var i) ? i : 0;
+        int? year = media.TryGetProperty("startDate", out var sd) && sd.TryGetProperty("year", out var y)
+            && y.TryGetInt32(out var yr) ? yr : null;
+        var format = media.TryGetProperty("format", out var f) && f.ValueKind == JsonValueKind.String
+            ? f.GetString() : null;
+        string? cover = null;
+        if (media.TryGetProperty("coverImage", out var ci))
+            cover = (ci.TryGetProperty("large", out var lg) ? lg.GetString() : null)
+                ?? (ci.TryGetProperty("medium", out var md) ? md.GetString() : null);
+        var desc = media.TryGetProperty("description", out var d) && d.ValueKind == JsonValueKind.String
+            ? Truncate(CleanDescription(d.GetString()), 240) : null;
+        return new OnlineMetadataCandidate(id, Title(media), year, format, cover, desc);
+    }
+
+    private static string Title(JsonElement media)
+    {
+        if (media.TryGetProperty("title", out var t))
+        {
+            var english = t.TryGetProperty("english", out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() : null;
+            var romaji = t.TryGetProperty("romaji", out var r) && r.ValueKind == JsonValueKind.String ? r.GetString() : null;
+            var name = english ?? romaji;
+            if (!string.IsNullOrWhiteSpace(name)) return name!;
+        }
+        return "Untitled";
+    }
+
+    private static string? Truncate(string? s, int max) =>
+        string.IsNullOrEmpty(s) ? s : (s.Length <= max ? s : s[..max].TrimEnd() + "…");
 
     private static OnlineSeriesMetadata Map(JsonElement media)
     {

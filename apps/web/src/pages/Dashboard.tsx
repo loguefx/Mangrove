@@ -389,7 +389,17 @@ export default function Dashboard() {
                 : `No series found. ${isAdmin ? "Run a scan to populate this library." : ""}`}
           </div>
         ) : (
-          <SeriesGrid series={series} />
+          <SeriesGrid
+            series={series}
+            isAdmin={isAdmin}
+            favoriteIds={new Set(wantToRead.map((w) => w.id))}
+            onChanged={() => {
+              loadHome();
+              if (typeof view === "number") {
+                api.series(view, seriesOpts()).then(setSeries).catch(() => {});
+              }
+            }}
+          />
         )}
       </main>
 

@@ -100,6 +100,87 @@ public sealed class SeriesController : ControllerBase
             true, meta.Summary, meta.Genres, meta.Tags, meta.Writer, meta.Penciller, meta.AgeRating, meta.CoverUrl));
     }
 
+    /// <summary>
+    /// Admin-only: "Identify" search — returns candidate matches from the online provider to choose
+    /// from, by name (default: the series' name) or directly by AniList id.
+    /// </summary>
+    [HttpGet("{id:int}/identify")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult<IReadOnlyList<Metadata.OnlineMetadataCandidate>>> Identify(
+        int id, [FromQuery] string? name, [FromQuery] int? anilistId, CancellationToken ct)
+    {
+        var series = await _db.Series.FirstOrDefaultAsync(s => s.Id == id, ct);
+        if (series is null) return NotFound();
+
+        if (anilistId is > 0)
+        {
+            var one = await _online.GetCandidateAsync(anilistId.Value, ct);
+            return Ok(one is null
+                ? Array.Empty<Metadata.OnlineMetadataCandidate>()
+                : new[] { one });
+        }
+
+        var query = string.IsNullOrWhiteSpace(name) ? series.Name : name.Trim();
+        var results = await _online.SearchAsync(query, ct);
+        return Ok(results);
+    }
+
+    /// <summary>Admin-only: apply a chosen "Identify" match (by AniList id) to the series.</summary>
+    [HttpPost("{id:int}/identify/{anilistId:int}")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult<SeriesDetailDto>> ApplyIdentify(int id, int anilistId, CancellationToken ct)
+    {
+        var series = await _db.Series
+            .Include(s => s.Volumes).ThenInclude(v => v.Chapters)
+            .FirstOrDefaultAsync(s => s.Id == id, ct);
+        if (series is null) return NotFound();
+
+        var meta = await _online.FetchByIdAsync(anilistId, ct);
+        if (meta is null) return BadRequest(new { error = "Could not load that title from AniList." });
+
+        if (!string.IsNullOrWhiteSpace(meta.Summary)) series.Summary = meta.Summary;
+        if (!string.IsNullOrWhiteSpace(meta.Genres)) series.Genres = meta.Genres;
+        if (!string.IsNullOrWhiteSpace(meta.Tags)) series.Tags = meta.Tags;
+        if (!string.IsNullOrWhiteSpace(meta.AgeRating))
+        {
+            series.AgeRating = meta.AgeRating;
+            series.AgeRatingTier = AgeRatingMap.Tier(meta.AgeRating);
+        }
+        if (meta.Writer is not null || meta.Penciller is not null)
+            series.People = System.Text.Json.JsonSerializer.Serialize(new { writer = meta.Writer, penciller = meta.Penciller });
+        series.ExternalIds = System.Text.Json.JsonSerializer.Serialize(new { anilist = anilistId });
+        series.MetadataLocked = true; // an explicit identify wins over future scans
+        series.UpdatedAt = DateTime.UtcNow;
+
+        byte[]? cover = null;
+        if (!string.IsNullOrWhiteSpace(meta.CoverUrl))
+        {
+            var raw = await _online.DownloadImageAsync(meta.CoverUrl!, ct);
+            if (raw is not null)
+            {
+                try
+                {
+                    cover = ImageHelper.ResizeCover(raw);
+                    var coverPath = _paths.CoverFileForSeries(series.Id);
+                    await System.IO.File.WriteAllBytesAsync(coverPath, cover, ct);
+                    series.CoverPath = coverPath;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to process identified cover for series {Id}", id);
+                    cover = null;
+                }
+            }
+        }
+
+        await _db.SaveChangesAsync(ct);
+
+        if (cover is not null) await _sidecar.WriteCoverAsync(series, cover, ct);
+        await _sidecar.WriteComicInfoAsync(series, ct);
+
+        return Ok(await BuildDetailAsync(series, User.GetUserId() ?? 0, ct));
+    }
+
     /// <summary>Admin-only: set the series cover from a remote image URL (e.g. the online provider's).</summary>
     [HttpPost("{id:int}/cover-from-url")]
     [Authorize(Roles = "Admin")]

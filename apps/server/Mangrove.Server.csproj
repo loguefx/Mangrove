@@ -7,7 +7,7 @@
     <!-- Published/built executable is Mangrove.exe (supports `Mangrove.exe install` as a service). -->
     <AssemblyName>Mangrove</AssemblyName>
     <RootNamespace>Mangrove.Server</RootNamespace>
-    <Version>1.0.16</Version>
+    <Version>1.0.17</Version>
     <Product>Mangrove</Product>
   </PropertyGroup>
 
