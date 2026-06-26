@@ -618,6 +618,9 @@ export const api = {
   scanAll: () =>
     request<{ libraries: number; status: string }>("/api/tasks/scan-all", { method: "POST" }),
 
+  repairCovers: () =>
+    request<{ status: string }>("/api/tasks/repair-covers", { method: "POST" }),
+
   // ---- Server updates (admin) ----
   updateStatus: () => request<UpdateStatusDto>("/api/admin/update/status"),
   applyUpdate: () => request<UpdateApplyResultDto>("/api/admin/update/apply", { method: "POST" }),

@@ -30,6 +30,38 @@ public static class ImageHelper
     }
 
     /// <summary>
+    /// True if the JPEG is missing/undecodable or effectively a solid (near-black) image — used to
+    /// detect covers corrupted by the old alpha-on-JPEG bug so they can be re-fetched. Legitimately
+    /// dark covers (with any text/art) average well above the threshold, so they aren't flagged.
+    /// </summary>
+    public static bool IsLikelyBlank(byte[]? jpeg)
+    {
+        if (jpeg is null || jpeg.Length == 0) return true;
+        try
+        {
+            using var bmp = SKBitmap.Decode(jpeg);
+            if (bmp is null || bmp.Width <= 0 || bmp.Height <= 0) return true;
+
+            double sum = 0;
+            int n = 0;
+            var stepX = Math.Max(1, bmp.Width / 32);
+            var stepY = Math.Max(1, bmp.Height / 32);
+            for (int y = 0; y < bmp.Height; y += stepY)
+            for (int x = 0; x < bmp.Width; x += stepX)
+            {
+                var c = bmp.GetPixel(x, y);
+                sum += (c.Red + c.Green + c.Blue) / 3.0;
+                n++;
+            }
+            return n == 0 || (sum / n) < 6.0;
+        }
+        catch
+        {
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Renders the source onto an opaque surface and encodes to JPEG. Flattening against a solid
     /// background is important because some source covers (e.g. PNG/WebP from online providers) carry
     /// an alpha channel — JPEG has no alpha, so transparent pixels would otherwise encode as solid

@@ -380,6 +380,21 @@ function TasksTab() {
     }
   };
 
+  const [repairing, setRepairing] = useState(false);
+  const repairCovers = async () => {
+    setRepairing(true);
+    setNotice(null);
+    try {
+      await api.repairCovers();
+      setNotice("Repairing black/missing covers in the background. Re-pulled covers appear shortly; check Tasks for the result.");
+      await load();
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : "Repair failed");
+    } finally {
+      setRepairing(false);
+    }
+  };
+
   if (loading) return <Spinner />;
 
   return (
@@ -391,6 +406,14 @@ function TasksTab() {
           className="rounded-xl bg-teal px-4 py-1.5 text-sm font-medium text-white hover:bg-teal/90 disabled:opacity-50"
         >
           {scanning ? "Scanning…" : "Scan all libraries"}
+        </button>
+        <button
+          onClick={repairCovers}
+          disabled={repairing}
+          className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm text-neutral-300 hover:bg-neutral-800 disabled:opacity-50"
+          title="Re-pull covers that are missing or solid black"
+        >
+          {repairing ? "Repairing…" : "Repair covers"}
         </button>
         <button
           onClick={load}
