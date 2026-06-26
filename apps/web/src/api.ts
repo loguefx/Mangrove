@@ -231,6 +231,19 @@ export interface ActivityDto {
   updatedAt: string;
 }
 
+// Bump this token whenever the cover pipeline changes so clients stop showing covers that were
+// cached under the previous (long-lived) cache rules. Combined with the server's revalidating
+// cache headers, this forces a one-time refetch and then relies on ETags for freshness.
+export const COVER_CACHE_BUST = "1019";
+
+/** Cover URL for a series, with a global cache-bust token (+ optional per-change version). */
+export const seriesCoverUrl = (id: number, v?: number | string) =>
+  `/api/series/${id}/cover?cb=${COVER_CACHE_BUST}${v ? `&v=${v}` : ""}`;
+
+/** Cover URL for a chapter, with the same global cache-bust token. */
+export const chapterCoverUrl = (id: number) =>
+  `/api/chapters/${id}/cover?cb=${COVER_CACHE_BUST}`;
+
 export interface OnlineCandidate {
   aniListId: number;
   title: string;

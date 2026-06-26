@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, type SearchResultDto } from "../api";
+import { api, seriesCoverUrl, type SearchResultDto } from "../api";
 import { Spinner } from "../components/Spinner";
 
 export default function SearchPage() {
@@ -61,7 +61,7 @@ export default function SearchPage() {
               <div className="aspect-[2/3] w-full overflow-hidden bg-neutral-800">
                 {r.hasCover ? (
                   <img
-                    src={`/api/series/${r.id}/cover`}
+                    src={seriesCoverUrl(r.id)}
                     alt={r.name}
                     className="h-full w-full object-cover transition group-hover:scale-[1.03]"
                     loading="lazy"

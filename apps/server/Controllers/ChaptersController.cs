@@ -84,8 +84,11 @@ public sealed class ChaptersController : ControllerBase
         var chapter = await _db.Chapters.FirstOrDefaultAsync(c => c.Id == id, ct);
         if (chapter?.CoverPath is null || !System.IO.File.Exists(chapter.CoverPath))
             return NotFound();
-        Response.Headers.CacheControl = "private, max-age=86400";
-        return PhysicalFile(chapter.CoverPath, "image/jpeg");
+        var info = new System.IO.FileInfo(chapter.CoverPath);
+        var etag = new Microsoft.Net.Http.Headers.EntityTagHeaderValue(
+            '"' + (info.LastWriteTimeUtc.Ticks ^ info.Length).ToString("x") + '"');
+        Response.Headers.CacheControl = "private, no-cache, max-age=0, must-revalidate";
+        return PhysicalFile(chapter.CoverPath, "image/jpeg", lastModified: info.LastWriteTimeUtc, entityTag: etag);
     }
 
     [HttpGet("{id:int}/pages/{n:int}")]

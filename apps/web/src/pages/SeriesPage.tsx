@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   api,
   fetchBlobObjectUrl,
+  seriesCoverUrl,
   type CollectionDto,
   type ReadingListDto,
   type ReviewDto,
@@ -110,7 +111,7 @@ export default function SeriesPage() {
       {series.hasCover && (
         <div className="pointer-events-none absolute inset-x-0 top-0 h-[22rem] overflow-hidden">
           <img
-            src={`/api/series/${series.id}/cover${coverVersion ? `?v=${coverVersion}` : ""}`}
+            src={seriesCoverUrl(series.id, coverVersion || undefined)}
             alt=""
             className="h-full w-full scale-110 object-cover opacity-30 blur-2xl"
           />
@@ -129,7 +130,7 @@ export default function SeriesPage() {
         <div className="h-64 w-44 shrink-0 overflow-hidden rounded-2xl bg-neutral-800 ring-1 ring-white/5">
           {series.hasCover ? (
             <img
-              src={`/api/series/${series.id}/cover${coverVersion ? `?v=${coverVersion}` : ""}`}
+              src={seriesCoverUrl(series.id, coverVersion || undefined)}
               alt={series.name}
               className="h-full w-full object-cover"
             />
@@ -761,7 +762,7 @@ function MetadataEditor({
               <img src={coverPreview} alt="New cover preview" className="h-full w-full object-cover" />
             ) : series.hasCover ? (
               <img
-                src={`/api/series/${series.id}/cover`}
+                src={seriesCoverUrl(series.id)}
                 alt={series.name}
                 className="h-full w-full object-cover"
               />

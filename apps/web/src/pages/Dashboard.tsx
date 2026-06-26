@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { api, type DashboardDto, type FavoriteUnread, type LibraryDto, type SeriesDto } from "../api";
+import { api, chapterCoverUrl, seriesCoverUrl, type DashboardDto, type FavoriteUnread, type LibraryDto, type SeriesDto } from "../api";
 import { useAuth } from "../auth";
 import { MangroveWordmark } from "../components/Brand";
 import { Spinner } from "../components/Spinner";
@@ -485,7 +485,7 @@ function HomeView({
                 to={`/reader/${c.nextChapterId}`}
                 title={c.seriesName}
                 subtitle={`Next: ch ${c.nextChapterNumber}`}
-                src={c.hasCover ? `/api/series/${c.seriesId}/cover` : null}
+                src={c.hasCover ? seriesCoverUrl(c.seriesId) : null}
               />
             </div>
           ))}
@@ -527,7 +527,7 @@ function HomeView({
                 to={`/reader/${c.chapterId}`}
                 title={c.seriesName}
                 subtitle={c.pageCount > 0 ? `${c.page + 1}/${c.pageCount}` : "In progress"}
-                src={c.hasCover ? `/api/chapters/${c.chapterId}/cover` : null}
+                src={c.hasCover ? chapterCoverUrl(c.chapterId) : null}
               />
             </div>
           ))}
@@ -551,7 +551,7 @@ function HomeView({
                 <CoverCard
                   to={`/series/${s.id}`}
                   title={s.name}
-                  src={s.hasCover ? `/api/series/${s.id}/cover` : null}
+                  src={s.hasCover ? seriesCoverUrl(s.id) : null}
                 />
               </div>
             );
@@ -566,7 +566,7 @@ function HomeView({
               key={s.id}
               to={`/series/${s.id}`}
               title={s.name}
-              src={s.hasCover ? `/api/series/${s.id}/cover` : null}
+              src={s.hasCover ? seriesCoverUrl(s.id) : null}
             />
           ))}
         </Rail>

@@ -224,8 +224,15 @@ public sealed class SeriesController : ControllerBase
         if (series?.CoverPath is null || !System.IO.File.Exists(series.CoverPath))
             return NotFound();
 
-        Response.Headers.CacheControl = "private, max-age=86400";
-        return PhysicalFile(series.CoverPath, "image/jpeg");
+        // Use revalidation rather than a long max-age: covers can change (online metadata, repair,
+        // re-uploads) under the same URL. "no-cache" makes the browser revalidate with the ETag, so a
+        // changed cover is fetched immediately while an unchanged one is a cheap 304. (The old
+        // max-age=86400 froze stale/black covers in the browser for a day.)
+        var info = new System.IO.FileInfo(series.CoverPath);
+        var etag = new Microsoft.Net.Http.Headers.EntityTagHeaderValue(
+            '"' + (info.LastWriteTimeUtc.Ticks ^ info.Length).ToString("x") + '"');
+        Response.Headers.CacheControl = "private, no-cache, max-age=0, must-revalidate";
+        return PhysicalFile(series.CoverPath, "image/jpeg", lastModified: info.LastWriteTimeUtc, entityTag: etag);
     }
 
     /// <summary>

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, type OnlineCandidate, type SeriesDto } from "../api";
+import { api, seriesCoverUrl, type OnlineCandidate, type SeriesDto } from "../api";
 
 const GRID_CLASS =
   "grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6";
@@ -122,7 +122,7 @@ function SeriesCard({
           )}
           {s.hasCover ? (
             <img
-              src={`/api/series/${s.id}/cover${coverV ? `?v=${coverV}` : ""}`}
+              src={seriesCoverUrl(s.id, coverV || undefined)}
               alt={s.name}
               className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.04]"
               loading="lazy"
