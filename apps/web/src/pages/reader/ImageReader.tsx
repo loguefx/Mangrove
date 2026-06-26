@@ -189,7 +189,22 @@ function ZoomViewport({
     if (zoom > 1) return; // taps don't turn pages while zoomed in
     onTap?.(e);
   };
-  const handleDoubleClick = () => setZoom(zoom > 1 ? 1 : 2.5);
+  // Double-click zoom only applies in the center zone. The left/right thirds are page-turn zones, so
+  // turning pages with quick repeated taps there must never be mistaken for a zoom gesture. A
+  // double-click while already zoomed resets to 100% from anywhere.
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    if (zoom > 1) {
+      setZoom(1);
+      return;
+    }
+    const el = containerRef.current;
+    if (el) {
+      const w = el.clientWidth;
+      const x = e.clientX - el.getBoundingClientRect().left;
+      if (x < w / 3 || x > (2 * w) / 3) return; // page-turn zones: do not zoom
+    }
+    setZoom(2.5);
+  };
 
   return (
     <div

@@ -298,8 +298,18 @@ private fun ZoomableImage(
                 }
                 .pointerInput(Unit) {
                     detectTapGestures(
-                        onDoubleTap = {
-                            if (curScale > 1f) onChange(1f, Offset.Zero) else onChange(2.5f, Offset.Zero)
+                        // Double-tap zoom only applies in the center zone. The left/right thirds are
+                        // page-turn zones, so quick repeated side taps must not be mistaken for a
+                        // zoom. A double-tap while zoomed resets to 100% from anywhere; a side
+                        // double-tap just turns the page.
+                        onDoubleTap = { pos ->
+                            if (curScale > 1f) {
+                                onChange(1f, Offset.Zero)
+                            } else {
+                                val frac = pos.x / size.width.toFloat()
+                                if (frac in (1f / 3f)..(2f / 3f)) onChange(2.5f, Offset.Zero)
+                                else onTap(frac)
+                            }
                         },
                         onTap = { pos -> onTap(pos.x / size.width.toFloat()) },
                     )
