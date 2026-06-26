@@ -478,6 +478,24 @@ export const api = {
     return request<SeriesDetailDto>(`/api/series/${id}/cover`, { method: "POST", body: form });
   },
 
+  fetchOnlineMetadata: (id: number, q?: string) =>
+    request<{
+      matched: boolean;
+      summary: string | null;
+      genres: string | null;
+      tags: string | null;
+      writer: string | null;
+      penciller: string | null;
+      ageRating: string | null;
+      coverUrl: string | null;
+    }>(`/api/series/${id}/online-metadata${q ? `?q=${encodeURIComponent(q)}` : ""}`, { method: "POST" }),
+
+  applyCoverFromUrl: (id: number, url: string) =>
+    request<SeriesDetailDto>(`/api/series/${id}/cover-from-url`, {
+      method: "POST",
+      body: JSON.stringify({ url }),
+    }),
+
   testStorage: (body: {
     storageKind: number;
     rootPath: string;

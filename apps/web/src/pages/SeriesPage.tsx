@@ -584,6 +584,56 @@ function MetadataEditor({
   const [coverPreview, setCoverPreview] = useState<string | null>(null);
   const [uploadingCover, setUploadingCover] = useState(false);
   const [coverMsg, setCoverMsg] = useState<string | null>(null);
+  const [finding, setFinding] = useState(false);
+  const [findMsg, setFindMsg] = useState<string | null>(null);
+  const [onlineCoverUrl, setOnlineCoverUrl] = useState<string | null>(null);
+  const [applyingOnlineCover, setApplyingOnlineCover] = useState(false);
+
+  const findOnline = async () => {
+    setFinding(true);
+    setFindMsg(null);
+    setError(null);
+    setOnlineCoverUrl(null);
+    try {
+      const m = await api.fetchOnlineMetadata(series.id, name || undefined);
+      if (!m.matched) {
+        setFindMsg("No match found on AniList. Try editing the name, then search again.");
+        return;
+      }
+      // Fill the fields the provider returned, overwriting what's there so the admin can review.
+      if (m.summary) setSummary(m.summary);
+      if (m.genres) setGenres(m.genres);
+      if (m.tags) setTags(m.tags);
+      if (m.ageRating) setAgeRating(m.ageRating);
+      setOnlineCoverUrl(m.coverUrl);
+      const extras = [m.writer && `writer: ${m.writer}`, m.penciller && `artist: ${m.penciller}`]
+        .filter(Boolean)
+        .join(", ");
+      setFindMsg(
+        `Found on AniList. Review and Save to apply.${extras ? ` (${extras})` : ""}`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Online lookup failed");
+    } finally {
+      setFinding(false);
+    }
+  };
+
+  const useOnlineCover = async () => {
+    if (!onlineCoverUrl) return;
+    setApplyingOnlineCover(true);
+    setError(null);
+    try {
+      const updated = await api.applyCoverFromUrl(series.id, onlineCoverUrl);
+      setOnlineCoverUrl(null);
+      setCoverMsg("Cover updated from AniList.");
+      onCoverUpdated(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not apply online cover");
+    } finally {
+      setApplyingOnlineCover(false);
+    }
+  };
 
   const pickCover = (file: File | null) => {
     setCoverMsg(null);
@@ -637,9 +687,22 @@ function MetadataEditor({
       <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-neutral-400">
         Edit metadata
       </h3>
-      <p className="mb-4 text-xs text-neutral-500">
+      <p className="mb-3 text-xs text-neutral-500">
         Saving locks this series' metadata — future scans won't overwrite your edits.
       </p>
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <button
+          onClick={findOnline}
+          disabled={finding}
+          className="rounded-xl border border-teal/60 bg-teal/10 px-4 py-1.5 text-sm font-medium text-teal-mint hover:bg-teal/20 disabled:opacity-50"
+        >
+          {finding ? "Searching…" : "Find metadata online"}
+        </button>
+        <span className="text-xs text-neutral-400">
+          Looks up the name on AniList and fills the fields below for review.
+        </span>
+      </div>
+      {findMsg && <p className="mb-3 text-xs text-teal-mint">{findMsg}</p>}
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="text-sm">
           <span className="mb-1 block text-neutral-400">Name</span>
@@ -727,6 +790,26 @@ function MetadataEditor({
             </div>
           </div>
         </div>
+
+        {onlineCoverUrl && (
+          <div className="mt-4 flex items-center gap-4 rounded-xl border border-teal/30 bg-teal/5 p-3">
+            <img
+              src={onlineCoverUrl}
+              alt="Cover from AniList"
+              className="h-32 w-24 shrink-0 rounded-lg object-cover ring-1 ring-white/5"
+            />
+            <div className="flex flex-col gap-2">
+              <span className="text-sm text-neutral-300">Cover found on AniList</span>
+              <button
+                onClick={useOnlineCover}
+                disabled={applyingOnlineCover}
+                className="self-start rounded-xl bg-teal px-4 py-1.5 text-sm font-medium text-white hover:bg-teal/90 disabled:opacity-50"
+              >
+                {applyingOnlineCover ? "Applying…" : "Use this cover"}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {error && <p className="mt-3 text-sm text-red-400">{error}</p>}

@@ -18,18 +18,21 @@ public sealed class SeriesController : ControllerBase
     private readonly AccessService _access;
     private readonly ServerPaths _paths;
     private readonly LibrarySidecarWriter _sidecar;
+    private readonly Metadata.AniListMetadataService _online;
     private readonly ILogger<SeriesController> _logger;
     public SeriesController(
         MangroveDbContext db,
         AccessService access,
         ServerPaths paths,
         LibrarySidecarWriter sidecar,
+        Metadata.AniListMetadataService online,
         ILogger<SeriesController> logger)
     {
         _db = db;
         _access = access;
         _paths = paths;
         _sidecar = sidecar;
+        _online = online;
         _logger = logger;
     }
 
@@ -71,6 +74,63 @@ public sealed class SeriesController : ControllerBase
         // Persist the corrected metadata back into the library so it replaces any cached ComicInfo.xml
         // and survives re-scans / DB resets (best-effort; read-only shares are simply skipped).
         await _sidecar.WriteComicInfoAsync(series, ct);
+
+        return Ok(await BuildDetailAsync(series, User.GetUserId() ?? 0, ct));
+    }
+
+    /// <summary>
+    /// Admin-only: look up this series on the online provider (AniList) and return the result for the
+    /// edit dialog to review. Nothing is saved — the admin edits and then clicks Save. Pass <c>q</c>
+    /// to search by a different title than the series' name.
+    /// </summary>
+    [HttpPost("{id:int}/online-metadata")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult<OnlineMetadataDto>> FetchOnlineMetadata(
+        int id, [FromQuery] string? q, CancellationToken ct)
+    {
+        var series = await _db.Series.FirstOrDefaultAsync(s => s.Id == id, ct);
+        if (series is null) return NotFound();
+
+        var query = string.IsNullOrWhiteSpace(q) ? series.Name : q.Trim();
+        var meta = await _online.FetchAsync(query, ct);
+        if (meta is null)
+            return Ok(new OnlineMetadataDto(false, null, null, null, null, null, null, null));
+
+        return Ok(new OnlineMetadataDto(
+            true, meta.Summary, meta.Genres, meta.Tags, meta.Writer, meta.Penciller, meta.AgeRating, meta.CoverUrl));
+    }
+
+    /// <summary>Admin-only: set the series cover from a remote image URL (e.g. the online provider's).</summary>
+    [HttpPost("{id:int}/cover-from-url")]
+    [Authorize(Roles = "Admin")]
+    public async Task<ActionResult<SeriesDetailDto>> CoverFromUrl(int id, CoverFromUrlRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.Url)) return BadRequest(new { error = "No image URL provided." });
+
+        var series = await _db.Series
+            .Include(s => s.Volumes).ThenInclude(v => v.Chapters)
+            .FirstOrDefaultAsync(s => s.Id == id, ct);
+        if (series is null) return NotFound();
+
+        var raw = await _online.DownloadImageAsync(req.Url, ct);
+        if (raw is null) return BadRequest(new { error = "Could not download the image." });
+
+        byte[] resized;
+        try { resized = ImageHelper.ResizeCover(raw); }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to process online cover for series {Id}", id);
+            return BadRequest(new { error = "Could not read the downloaded image." });
+        }
+
+        var coverPath = _paths.CoverFileForSeries(series.Id);
+        await System.IO.File.WriteAllBytesAsync(coverPath, resized, ct);
+        series.CoverPath = coverPath;
+        series.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        var savedToLibrary = await _sidecar.WriteCoverAsync(series, resized, ct);
+        Response.Headers["X-Cover-Saved-To-Library"] = savedToLibrary ? "true" : "false";
 
         return Ok(await BuildDetailAsync(series, User.GetUserId() ?? 0, ct));
     }

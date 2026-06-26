@@ -90,6 +90,14 @@ public sealed record EpubManifestDto(
 public sealed record UpdateSeriesRequest(
     string? Name, string? Summary, string? Publisher, string? Language, string? Genres, string? Tags, string? AgeRating);
 
+/// <summary>Preview of metadata fetched from the online provider for the edit dialog (not persisted).</summary>
+public sealed record OnlineMetadataDto(
+    bool Matched, string? Summary, string? Genres, string? Tags,
+    string? Writer, string? Penciller, string? AgeRating, string? CoverUrl);
+
+/// <summary>Apply a cover image from a remote URL (e.g. the online provider's cover).</summary>
+public sealed record CoverFromUrlRequest(string Url);
+
 // ---- Phase 3: users / admin ----
 public sealed record AdminUserDto(
     int Id, string Username, string? Email, IReadOnlyList<string> Roles, bool IsLocked,
