@@ -406,7 +406,17 @@ public sealed class LibraryScanner
             return;
         }
 
-        if (string.IsNullOrEmpty(series.CoverPath) || !File.Exists(series.CoverPath))
+        // Decide whether the series needs a (new) poster: none yet, the file is gone, or the current
+        // cover is a banner-shaped image (e.g. a wide folder.jpg backdrop) that crops to a blank card.
+        var needsCover = string.IsNullOrEmpty(series.CoverPath) || !File.Exists(series.CoverPath);
+        if (!needsCover && CurrentCoverIsBanner(series))
+        {
+            // Drop the banner so the portrait first-page cover (cached during chapter scanning) wins.
+            series.CoverPath = null;
+            await _db.SaveChangesAsync(ct);
+            needsCover = true;
+        }
+        if (needsCover)
             await TryApplyFolderCoverAsync(series, entries, provider, ct);
         await TryApplySidecarMetadataAsync(series, entries, provider, ct);
     }
@@ -442,7 +452,17 @@ public sealed class LibraryScanner
             using var ms = new MemoryStream();
             await stream.CopyToAsync(ms, ct);
 
-            var resized = ImageHelper.ResizeCover(ms.ToArray());
+            var bytes = ms.ToArray();
+            // A wide banner makes a poor portrait poster; let the chapter's first page be the cover.
+            if (ImageHelper.IsBannerAspect(bytes))
+            {
+                _logger.LogInformation(
+                    "Ignoring banner-shaped folder cover for series '{Series}'; using page cover instead.",
+                    series.Name);
+                return false;
+            }
+
+            var resized = ImageHelper.ResizeCover(bytes);
             var seriesCover = _paths.CoverFileForSeries(series.Id);
             await File.WriteAllBytesAsync(seriesCover, resized, ct);
             series.CoverPath = seriesCover;
@@ -708,6 +728,14 @@ public sealed class LibraryScanner
     }
 
     private static bool HasCover(Series s) => !string.IsNullOrEmpty(s.CoverPath) && File.Exists(s.CoverPath);
+
+    /// <summary>True if the series' current cached cover is a banner-shaped (non-poster) image.</summary>
+    private static bool CurrentCoverIsBanner(Series s)
+    {
+        if (string.IsNullOrEmpty(s.CoverPath) || !File.Exists(s.CoverPath)) return false;
+        try { return ImageHelper.IsBannerAspect(File.ReadAllBytes(s.CoverPath)); }
+        catch { return false; }
+    }
 
     private static bool NeedsOnline(Series s) =>
         string.IsNullOrEmpty(s.Summary) || string.IsNullOrEmpty(s.Genres) || !HasCover(s);

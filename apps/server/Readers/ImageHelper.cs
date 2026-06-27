@@ -1,3 +1,4 @@
+using System.IO;
 using SkiaSharp;
 
 namespace Mangrove.Server.Readers;
@@ -26,6 +27,29 @@ public static class ImageHelper
         catch
         {
             return input;
+        }
+    }
+
+    /// <summary>
+    /// True if the image is clearly landscape/banner-shaped (noticeably wider than tall). Such images
+    /// (e.g. Jellyfin-style backdrop "folder.jpg" banners) make poor portrait series posters: cropping
+    /// them to a 2:3 card shows a blank center. Reads only the header, so it's cheap.
+    /// </summary>
+    public static bool IsBannerAspect(byte[]? bytes)
+    {
+        if (bytes is null || bytes.Length == 0) return false;
+        try
+        {
+            using var ms = new MemoryStream(bytes, writable: false);
+            using var codec = SKCodec.Create(ms);
+            if (codec is null) return false;
+            var info = codec.Info;
+            if (info.Width <= 0 || info.Height <= 0) return false;
+            return info.Width > info.Height * 1.2; // posters are portrait; allow a little slack
+        }
+        catch
+        {
+            return false;
         }
     }
 

@@ -18,6 +18,15 @@ public class ImageHelperTests
     }
 
     [Fact]
+    public void IsBannerAspect_FlagsWideBannerNotPortrait()
+    {
+        var banner = MakeSolidColorJpeg(1200, 240, new SKColor(10, 10, 10));
+        var poster = MakeSolidColorJpeg(800, 1280, new SKColor(10, 10, 10));
+        Assert.True(ImageHelper.IsBannerAspect(banner), "wide banner should be flagged");
+        Assert.False(ImageHelper.IsBannerAspect(poster), "portrait poster should not be flagged");
+    }
+
+    [Fact]
     public void ResizeCover_KeepsOpaqueColorImage()
     {
         var jpg = MakeSolidColorJpeg(800, 1200, new SKColor(40, 120, 200));
