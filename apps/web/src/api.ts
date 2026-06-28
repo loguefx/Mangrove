@@ -359,16 +359,49 @@ async function request<T>(path: string, options: RequestInit = {}, retry = true)
   return (contentType.includes("application/json") ? await res.json() : (await res.text())) as T;
 }
 
+// Coalesce concurrent refreshes: when the access token expires, a burst of parallel requests can all
+// hit 401 at once. Without this, each would fire its own /refresh and they'd race each other; we make
+// them all await a single in-flight refresh instead.
+let refreshInFlight: Promise<boolean> | null = null;
+
 async function tryRefresh(): Promise<boolean> {
-  try {
-    const res = await fetch("/api/auth/refresh", { method: "POST", credentials: "include" });
-    if (!res.ok) return false;
-    const data: AuthResponse = await res.json();
-    accessToken = data.accessToken;
-    return true;
-  } catch {
-    return false;
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      try {
+        const res = await fetch("/api/auth/refresh", { method: "POST", credentials: "include" });
+        if (!res.ok) return false;
+        const data: AuthResponse = await res.json();
+        accessToken = data.accessToken;
+        scheduleProactiveRefresh(data.expiresInSeconds);
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+    void refreshInFlight.finally(() => {
+      refreshInFlight = null;
+    });
   }
+  return refreshInFlight;
+}
+
+// Renew the access token shortly before it expires so an idle page never even hits a 401 (which would
+// otherwise surface a brief unauthorized blip). Best-effort: on failure we fall back to refresh-on-401.
+let proactiveTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function scheduleProactiveRefresh(expiresInSeconds: number) {
+  if (proactiveTimer) clearTimeout(proactiveTimer);
+  if (!accessToken || !Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) return;
+  // Refresh at 80% of the lifetime (and at least 30s out), capped to setTimeout's safe range.
+  const leadMs = Math.min(Math.max(expiresInSeconds * 0.8, 30) * 1000, 2 ** 31 - 1);
+  proactiveTimer = setTimeout(() => {
+    if (accessToken) void tryRefresh();
+  }, leadMs);
+}
+
+export function cancelProactiveRefresh() {
+  if (proactiveTimer) clearTimeout(proactiveTimer);
+  proactiveTimer = null;
 }
 
 export const api = {

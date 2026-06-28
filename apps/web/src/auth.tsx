@@ -1,6 +1,13 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
-import { api, setAccessToken, setUnauthorizedHandler, type UserDto } from "./api";
+import {
+  api,
+  cancelProactiveRefresh,
+  scheduleProactiveRefresh,
+  setAccessToken,
+  setUnauthorizedHandler,
+  type UserDto,
+} from "./api";
 
 interface AuthState {
   user: UserDto | null;
@@ -18,6 +25,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     setUnauthorizedHandler(() => {
+      cancelProactiveRefresh();
       setAccessToken(null);
       setUser(null);
     });
@@ -29,6 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       try {
         const res = await api.refresh();
         setAccessToken(res.accessToken);
+        scheduleProactiveRefresh(res.expiresInSeconds);
         setUser(res.user);
       } catch {
         setAccessToken(null);
@@ -42,12 +51,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (username: string, password: string) => {
     const res = await api.login(username, password);
     setAccessToken(res.accessToken);
+    scheduleProactiveRefresh(res.expiresInSeconds);
     setUser(res.user);
   };
 
   const registerFirst = async (username: string, email: string | null, password: string) => {
     const res = await api.registerFirst(username, email, password);
     setAccessToken(res.accessToken);
+    scheduleProactiveRefresh(res.expiresInSeconds);
     setUser(res.user);
   };
 
@@ -55,6 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       await api.logout();
     } finally {
+      cancelProactiveRefresh();
       setAccessToken(null);
       setUser(null);
     }

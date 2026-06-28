@@ -100,7 +100,13 @@ public sealed class AuthService
         return await IssueAsync(user, ct);
     }
 
-    /// <summary>Validates + rotates a refresh token, returning a new token pair.</summary>
+    /// <summary>
+    /// Validates a refresh token and issues a fresh access token, keeping the SAME refresh token and
+    /// sliding its expiry. We deliberately do NOT rotate (revoke + reissue) here: rotation creates a
+    /// race where parallel refreshes (e.g. several API calls firing at once after the access token
+    /// expires, or multiple tabs) revoke each other's token and bounce the user back to the login
+    /// screen. Reusing the token keeps an active device signed in until it explicitly logs out.
+    /// </summary>
     public async Task<AuthResult> RefreshAsync(string rawRefreshToken, CancellationToken ct = default)
     {
         var hash = JwtTokenService.HashRefreshToken(rawRefreshToken);
@@ -111,9 +117,20 @@ public sealed class AuthService
         if (token is null || !token.IsActive)
             throw new UnauthorizedAccessException("Invalid or expired refresh token.");
 
-        token.RevokedAt = DateTime.UtcNow; // rotate
-        var result = await IssueAsync(token.User, ct);
-        return result;
+        // Slide the expiry forward so a device that keeps being used never times out.
+        token.ExpiresAt = DateTime.UtcNow.Add(_tokens.Options.RefreshTokenLifetime);
+        token.User.LastActiveAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+
+        var roles = RoleNames(token.User);
+        var access = _tokens.CreateAccessToken(token.User, roles);
+        return new AuthResult
+        {
+            User = token.User,
+            AccessToken = access,
+            RefreshToken = rawRefreshToken, // unchanged — re-sent so the cookie's expiry slides too
+            Roles = roles,
+        };
     }
 
     public async Task LogoutAsync(string rawRefreshToken, CancellationToken ct = default)

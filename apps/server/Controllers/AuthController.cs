@@ -15,11 +15,13 @@ public sealed class AuthController : ControllerBase
 
     private readonly AuthService _auth;
     private readonly MangroveDbContext _db;
+    private readonly JwtOptions _jwt;
 
-    public AuthController(AuthService auth, MangroveDbContext db)
+    public AuthController(AuthService auth, MangroveDbContext db, JwtOptions jwt)
     {
         _auth = auth;
         _db = db;
+        _jwt = jwt;
     }
 
     [HttpGet("setup-status")]
@@ -103,7 +105,7 @@ public sealed class AuthController : ControllerBase
     {
         SetRefreshCookie(result.RefreshToken);
         var user = new UserDto(result.User.Id, result.User.Username, result.User.Email, result.Roles);
-        return new AuthResponse(result.AccessToken, 1800, user);
+        return new AuthResponse(result.AccessToken, (int)_jwt.AccessTokenLifetime.TotalSeconds, user);
     }
 
     private void SetRefreshCookie(string token)
@@ -114,7 +116,9 @@ public sealed class AuthController : ControllerBase
             Secure = Request.IsHttps,
             SameSite = SameSiteMode.Lax,
             Path = "/api/auth",
-            Expires = DateTimeOffset.UtcNow.AddDays(30),
+            // Persist the cookie for the full refresh-token lifetime so a signed-in device stays
+            // signed in across browser restarts until the user logs out.
+            Expires = DateTimeOffset.UtcNow.Add(_jwt.RefreshTokenLifetime),
         });
     }
 

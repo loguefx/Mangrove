@@ -5,8 +5,10 @@ public sealed class JwtOptions
     public string Secret { get; init; } = string.Empty;
     public string Issuer { get; init; } = "mangrove";
     public string Audience { get; init; } = "mangrove";
-    public TimeSpan AccessTokenLifetime { get; init; } = TimeSpan.FromMinutes(30);
-    public TimeSpan RefreshTokenLifetime { get; init; } = TimeSpan.FromDays(30);
+    // Long-lived sessions: an active device stays signed in until the user explicitly logs out.
+    // The access token is renewed silently via the refresh cookie (which slides on every refresh).
+    public TimeSpan AccessTokenLifetime { get; init; } = TimeSpan.FromHours(12);
+    public TimeSpan RefreshTokenLifetime { get; init; } = TimeSpan.FromDays(3650);
 
     public static JwtOptions FromConfiguration(
         IConfiguration config, Mangrove.Server.Security.ServerSecrets secrets, ILogger logger)
