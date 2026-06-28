@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, fetchImageObjectUrl, prefetchAuthed, type ChapterManifestDto } from "../../api";
 import { Spinner } from "../../components/Spinner";
 import { usePreferences } from "../../preferences";
@@ -153,7 +153,10 @@ function ZoomViewport({
   onTap?: (e: React.MouseEvent) => void;
   children: React.ReactNode;
 }) {
-  const drag = useRef<{ x: number; y: number; sl: number; st: number; moved: boolean } | null>(null);
+  const drag = useRef<{ x: number; y: number; sl: number; st: number } | null>(null);
+  // Tracks whether the last pointer gesture actually dragged (a pan) vs. a tap. Kept in its own ref
+  // so it survives until the click handler runs (pointerup clears `drag` before the click fires).
+  const moved = useRef(false);
 
   const onWheel = (e: React.WheelEvent) => {
     if (!(e.ctrlKey || e.metaKey)) return; // plain wheel scrolls/pans
@@ -165,7 +168,8 @@ function ZoomViewport({
     if (zoom <= 1 || e.button !== 0) return;
     const el = containerRef.current;
     if (!el) return;
-    drag.current = { x: e.clientX, y: e.clientY, sl: el.scrollLeft, st: el.scrollTop, moved: false };
+    drag.current = { x: e.clientX, y: e.clientY, sl: el.scrollLeft, st: el.scrollTop };
+    moved.current = false;
     el.setPointerCapture(e.pointerId);
   };
   const onPointerMove = (e: React.PointerEvent) => {
@@ -174,7 +178,7 @@ function ZoomViewport({
     if (!d || !el) return;
     const dx = e.clientX - d.x;
     const dy = e.clientY - d.y;
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) d.moved = true;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved.current = true;
     el.scrollLeft = d.sl - dx;
     el.scrollTop = d.st - dy;
   };
@@ -184,26 +188,25 @@ function ZoomViewport({
   };
 
   const handleClick = (e: React.MouseEvent) => {
-    if (drag.current?.moved) return; // finished a pan, not a tap
     if (e.detail > 1) return; // part of a double-click (zoom toggle)
-    if (zoom > 1) return; // taps don't turn pages while zoomed in
-    onTap?.(e);
-  };
-  // Double-click zoom only applies in the center zone. The left/right thirds are page-turn zones, so
-  // turning pages with quick repeated taps there must never be mistaken for a zoom gesture. A
-  // double-click while already zoomed resets to 100% from anywhere.
-  const handleDoubleClick = (e: React.MouseEvent) => {
-    if (zoom > 1) {
-      setZoom(1);
+    if (moved.current) {
+      moved.current = false; // finished a pan, not a tap
       return;
     }
+    // Taps turn pages / toggle chrome at any zoom level (the page-turn zones still work zoomed in).
+    onTap?.(e);
+  };
+  // Double-click toggles zoom, but ONLY in the center zone. The left/right thirds are page-turn zones,
+  // so a double-tap there keeps the current zoom (it doesn't reset to 100%) — the user's chosen zoom
+  // persists across page turns.
+  const handleDoubleClick = (e: React.MouseEvent) => {
     const el = containerRef.current;
     if (el) {
       const w = el.clientWidth;
       const x = e.clientX - el.getBoundingClientRect().left;
-      if (x < w / 3 || x > (2 * w) / 3) return; // page-turn zones: do not zoom
+      if (x < w / 3 || x > (2 * w) / 3) return; // page-turn zones: preserve zoom
     }
-    setZoom(2.5);
+    setZoom(zoom > 1 ? 1 : 2.5);
   };
 
   return (
@@ -234,6 +237,7 @@ function ZoomImage({
   zoom,
   frac,
   containerRef,
+  onLoaded,
 }: {
   src: string;
   alt: string;
@@ -241,6 +245,7 @@ function ZoomImage({
   zoom: number;
   frac: number; // share of viewport width this page may use (1 single, 0.5 double)
   containerRef: React.RefObject<HTMLElement>;
+  onLoaded?: () => void;
 }) {
   const [nat, setNat] = useState<{ w: number; h: number } | null>(null);
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
@@ -254,6 +259,13 @@ function ZoomImage({
     ro.observe(el);
     return () => ro.disconnect();
   }, [containerRef]);
+
+  // Fires once the new page has its natural size applied (i.e. after a page turn). The parent uses
+  // this to reset the scroll position to the top of the fresh page.
+  useEffect(() => {
+    if (nat) onLoaded?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nat]);
 
   const style = useMemo<React.CSSProperties>(() => {
     if (!nat || !box || nat.w === 0 || nat.h === 0) return { maxWidth: "100%", maxHeight: "100%" };
@@ -335,6 +347,22 @@ function Paged(props: {
   const [loading, setLoading] = useState(true);
 
   const current = spreads[spreadIdx] ?? [0];
+
+  // After a page turn, jump back to the top of the new page (and re-center horizontally when zoomed)
+  // so the reader doesn't stay scrolled into the middle/bottom of the previous page.
+  const recenter = useCallback(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    el.scrollTop = 0;
+    el.scrollLeft = Math.max(0, (el.scrollWidth - el.clientWidth) / 2);
+  }, []);
+
+  // Immediately snap to the top on a page change (before the new image finishes decoding); `recenter`
+  // runs again via ZoomImage.onLoaded once the final size is known so horizontal centering is exact.
+  useLayoutEffect(() => {
+    const el = viewportRef.current;
+    if (el) el.scrollTop = 0;
+  }, [spreadIdx]);
 
   useEffect(() => {
     let active = true;
@@ -473,6 +501,7 @@ function Paged(props: {
                 zoom={zoom}
                 frac={1 / ordered.length}
                 containerRef={viewportRef}
+                onLoaded={recenter}
               />
             ) : null;
           })
