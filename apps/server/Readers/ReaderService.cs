@@ -54,6 +54,16 @@ public sealed class ReaderService
         }
     }
 
+    /// <summary>
+    /// For comic archives, begins buffering the file in the background so the first page reads that
+    /// follow (e.g. right after the reader loads the manifest) are fast. No-op for other formats.
+    /// </summary>
+    public void WarmArchive(string format, string storagePath, IStorageProvider provider)
+    {
+        if (FormatRegistry.FromFormat(format) == MediaKind.ComicArchive)
+            _archiveCache.Warm(storagePath, provider);
+    }
+
     /// <summary>Returns a rendered/extracted page image. Returns null for EPUB (use book endpoints).</summary>
     public async Task<(byte[] Bytes, string ContentType)?> GetPageAsync(
         string format, string storagePath, IStorageProvider provider, int index, CancellationToken ct = default)

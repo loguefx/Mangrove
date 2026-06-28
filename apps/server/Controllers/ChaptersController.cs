@@ -41,6 +41,15 @@ public sealed class ChaptersController : ControllerBase
         var chapter = await LoadChapterAsync(id, ct);
         if (chapter is null) return NotFound();
 
+        // Start buffering the archive now so the first page request (moments later) is served from
+        // RAM rather than waiting for the whole file to download.
+        var file = chapter.Files.FirstOrDefault();
+        if (file is not null)
+        {
+            var lib = chapter.Volume.Series.Library;
+            _readers.WarmArchive(file.Format, file.StoragePath, _providers.ForLibrary(lib, lib.Credential));
+        }
+
         var direction = chapter.Volume.Series.Library.Type == LibraryType.Manga ? "rtl" : "ltr";
         var kind = FormatRegistry.FromFormat(chapter.FileFormat);
         var mediaType = kind == MediaKind.Epub ? "epub" : "image";
