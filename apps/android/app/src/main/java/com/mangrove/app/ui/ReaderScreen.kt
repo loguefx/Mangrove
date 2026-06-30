@@ -1,6 +1,7 @@
 package com.mangrove.app.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -13,11 +14,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -48,6 +51,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
 import com.mangrove.app.data.AppContainer
 import com.mangrove.app.data.ChapterManifestDto
@@ -183,12 +187,10 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
                         contentScale = ContentScale.Fit,
                     )
                 } else {
-                    NetworkImage(
+                    ReaderPageImage(
                         container = container,
                         path = "api/chapters/$chapterId/pages/$page",
                         contentDescription = "Page ${page + 1}",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit,
                     )
                 }
             }
@@ -199,9 +201,13 @@ fun ReaderScreen(container: AppContainer, nav: NavController, chapterId: Int) {
         Row(
             Modifier
                 .fillMaxWidth()
+                .align(Alignment.TopCenter)
+                // Tint fills behind the status bar, but the controls are inset below it so the back /
+                // settings buttons don't sit under the notification area (the chapter + page text keep
+                // their centered layout, just dropped clear of the system bar).
                 .background(Color(0xCC000000))
-                .padding(horizontal = 4.dp, vertical = 2.dp)
-                .align(Alignment.TopCenter),
+                .statusBarsPadding()
+                .padding(horizontal = 4.dp, vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = { nav.popBackStack() }) {
@@ -341,6 +347,49 @@ private fun ZoomableImage(
             contentAlignment = Alignment.Center,
         ) { content() }
     }
+}
+
+/**
+ * A reader page loaded over the network with explicit loading/error states so a slow or failed fetch
+ * shows a spinner / retry prompt instead of a blank black screen. Cache keys default to the URL, so
+ * prefetched neighbouring pages are still reused; tapping a failed page rebuilds the request to retry.
+ */
+@Composable
+private fun ReaderPageImage(container: AppContainer, path: String, contentDescription: String?) {
+    val context = LocalContext.current
+    val loader = container.imageLoader
+    if (loader == null) {
+        Box(Modifier.fillMaxSize().background(Color.Black))
+        return
+    }
+    var attempt by remember(path) { mutableIntStateOf(0) }
+    val model = remember(path, attempt) {
+        ImageRequest.Builder(context).data(container.absoluteUrl(path)).build()
+    }
+    SubcomposeAsyncImage(
+        model = model,
+        imageLoader = loader,
+        contentDescription = contentDescription,
+        contentScale = ContentScale.Fit,
+        modifier = Modifier.fillMaxSize(),
+        loading = {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Color.White)
+            }
+        },
+        error = {
+            Box(
+                Modifier.fillMaxSize().clickable { attempt++ },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    "Couldn't load this page.\nTap to retry.",
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        },
+    )
 }
 
 @Composable
