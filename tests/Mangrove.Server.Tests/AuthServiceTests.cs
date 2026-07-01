@@ -100,17 +100,22 @@ public class AuthServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Refresh_RotatesToken_OldOneNoLongerValid()
+    public async Task Refresh_ReusesToken_KeepsDeviceSignedIn()
     {
         var login = await _auth.RegisterFirstAdminAsync("admin", null, "password123");
         var original = login.RefreshToken;
 
         var refreshed = await _auth.RefreshAsync(original);
         Assert.False(string.IsNullOrWhiteSpace(refreshed.AccessToken));
-        Assert.NotEqual(original, refreshed.RefreshToken);
 
-        // The rotated (old) token must be rejected.
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _auth.RefreshAsync(original));
+        // We intentionally do NOT rotate the refresh token: the same token is reused so parallel
+        // refreshes (or multiple tabs/devices) can't revoke each other and bounce the user to login.
+        Assert.Equal(original, refreshed.RefreshToken);
+
+        // The original token stays valid and can be used again to refresh.
+        var again = await _auth.RefreshAsync(original);
+        Assert.False(string.IsNullOrWhiteSpace(again.AccessToken));
+        Assert.Equal(original, again.RefreshToken);
     }
 
     [Fact]

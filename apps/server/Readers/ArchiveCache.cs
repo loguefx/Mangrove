@@ -134,11 +134,15 @@ public sealed class ArchiveCache
             .OrderBy(k => k, NaturalComparer.Instance)
             .ToList();
 
+    // Copy in large blocks so buffering a big archive over SMB takes a handful of round-trips instead
+    // of hundreds (Stream.CopyToAsync's default ~80 KB buffer caps each network read far too small).
+    private const int CopyBufferBytes = 4 * 1024 * 1024;
+
     private async Task<byte[]> DownloadAsync(string path, IStorageProvider provider)
     {
         await using var stream = await provider.OpenReadAsync(path, CancellationToken.None).ConfigureAwait(false);
         using var buffer = new MemoryStream();
-        await stream.CopyToAsync(buffer, CancellationToken.None).ConfigureAwait(false);
+        await stream.CopyToAsync(buffer, CopyBufferBytes, CancellationToken.None).ConfigureAwait(false);
         return buffer.ToArray();
     }
 
